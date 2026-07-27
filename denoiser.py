@@ -47,11 +47,35 @@ class DeepFilterNetDenoiser:
         """Download / load model on first use."""
         try:
             from df.enhance import enhance, init_df
-        except ImportError:
+        except ImportError as e:
+            # deepfilternet 0.5.6 uses torchaudio APIs that were removed in
+            # torchaudio 2.1 (`torchaudio.backend.common.AudioMetaData`,
+            # `torchaudio.info`). With a modern torchaudio installed, the
+            # import fails here — but the message names torchaudio, not
+            # deepfilternet, so distinguish the two cases rather than always
+            # claiming DeepFilterNet is missing.
+            msg = str(e)
+            if "torchaudio" in msg:
+                raise ImportError(
+                    f"DeepFilterNet is installed but incompatible with the "
+                    f"installed torchaudio ({msg}).\n"
+                    f"\n"
+                    f"deepfilternet 0.5.6 needs torchaudio <= 2.0.2, which "
+                    f"pins torch to 2.0.1 (max GPU arch sm_86). On newer GPUs "
+                    f"(H100 = sm_90) that torch cannot run at all, so this "
+                    f"project keeps modern torch and leaves Stage 4 "
+                    f"unavailable.\n"
+                    f"\n"
+                    f"Options:\n"
+                    f"  • Run with --no-denoise to skip Stage 4 (Stages 1-3, "
+                    f"the beamformer, are unaffected).\n"
+                    f"  • For Stage 4, build a separate CPU/sm_86 environment "
+                    f"with torch==2.0.1 and torchaudio==2.0.2."
+                ) from e
             raise ImportError(
                 "DeepFilterNet is not installed.\n"
                 "Install it with:  pip install deepfilternet"
-            )
+            ) from e
 
         model, df_state, _ = init_df()
         self._model    = model
@@ -104,12 +128,13 @@ class DeepFilterNetDenoiser:
                           Y: np.ndarray,
                           istft_fn,
                           length: int | None = None,
-                          sr: int = 48_000) -> tuple[np.ndarray, np.ndarray]:
+                          sr: int = 48_000) -> np.ndarray:
         """
         Denoise starting from a beamformed STFT spectrum.
 
-        Performs iSTFT → DeepFilterNet → returns both time-domain and
-        STFT of the enhanced signal.
+        Performs iSTFT → DeepFilterNet and returns the enhanced time-domain
+        signal (this is what pipeline_2.AriaDenoisingPipeline.process()
+        expects).
 
         Parameters
         ----------

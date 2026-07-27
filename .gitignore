@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# uv / virtualenv
+.venv/
+venv/
+
+# Datasets and model caches (downloaded via scripts/fetch_data.py)
+data/
+synthetic_dataset/
+
+# Evaluation outputs
+*.csv
+plots/

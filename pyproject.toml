@@ -1,0 +1,66 @@
+[project]
+name = "aria-gaze-denoising"
+version = "0.1.0"
+description = "Gaze-steered MVDR beamforming pipeline for AR-glasses microphone arrays, with synthetic dataset generation and evaluation."
+requires-python = ">=3.11,<3.12"
+
+dependencies = [
+    # ── Core numerics ────────────────────────────────────────────────────
+    # numpy is pinned <2 because pesq / pyroomacoustics / deepfilternet in
+    # the resolved set are not yet numpy-2.x clean. `uv pip compile` on the
+    # unpinned set independently resolves to 1.26.4, so this pin only makes
+    # the existing resolution explicit rather than constraining it further.
+    "numpy>=1.26,<2",
+    "scipy>=1.11",
+    # ── Audio I/O ────────────────────────────────────────────────────────
+    "soundfile>=0.12",       # every .wav read/write in gen + eval
+    "resampy>=0.4",          # 48k <-> 16k for PESQ/STOI scoring
+    # ── Dataset generation ───────────────────────────────────────────────
+    "pyroomacoustics>=0.7",  # ISM room simulation (when no ATF supplied)
+    "h5py>=3.9",             # EasyCom Device_ATFs.h5 reader
+    # ── Evaluation metrics ───────────────────────────────────────────────
+    # Both are optional at runtime (eval_synthetic_2.py wraps them in
+    # try/except and returns NaN if missing) but installed by default so
+    # the metric columns are actually populated.
+    "pesq>=0.0.4",
+    "pystoi>=0.3.3",
+    # ── Plotting ─────────────────────────────────────────────────────────
+    "matplotlib>=3.7",       # only needed for eval --plot
+    # ── Stage 4 denoiser ─────────────────────────────────────────────────
+    # torch drives both stft.py's batched STFT/ISTFT (soft dependency there —
+    # it falls back to NumPy) and DeepFilterNet (hard dependency).
+    #
+    # KNOWN INCOMPATIBILITY — read before changing these pins:
+    #   deepfilternet 0.5.6 imports `torchaudio.backend.common.AudioMetaData`
+    #   and calls `torchaudio.info()`. Both were removed in torchaudio 2.1,
+    #   so Stage 4 only works with torchaudio <= 2.0.2, which in turn pins
+    #   torch to 2.0.1 (CUDA 11.7, max arch sm_86).
+    #
+    #   That pin is NOT usable on Hopper/Blackwell GPUs (H100 = sm_90): the
+    #   whole pipeline dies with "no kernel image is available for execution
+    #   on the device" as soon as stft.py touches CUDA.
+    #
+    #   So we keep MODERN torch — GPU-accelerated STFT works everywhere, and
+    #   Stages 1-3 (the actual research contribution) are unaffected. When
+    #   torchaudio is too new, denoiser.py raises a clear, actionable error
+    #   instead of failing obscurely mid-run.
+    #
+    #   To run Stage 4 today: use `--no-denoise` to skip it, or build a
+    #   separate CPU/sm_86 env with `torch==2.0.1, torchaudio==2.0.2`.
+    "deepfilternet>=0.5.6",
+    "torch>=2.6",
+    # deepfilternet imports torchaudio at runtime but does not declare it as
+    # a dependency, so it must be requested explicitly.
+    "torchaudio>=2.6",
+]
+
+[dependency-groups]
+dev = [
+    "ipython>=8",
+]
+
+# This project is a flat collection of top-level modules (stft.py, doa_2.py,
+# beamformer_2.py, ...) rather than an installable package. Tell uv not to
+# try to build/install it into the venv — we only want the dependencies.
+[tool.uv]
+package = false
