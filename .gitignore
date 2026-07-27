@@ -14,3 +14,6 @@ synthetic_dataset/
 # Evaluation outputs
 *.csv
 plots/
+
+# Logs
+*.log
