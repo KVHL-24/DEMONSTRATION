@@ -58,19 +58,69 @@ It prints ready-to-paste generate/eval commands when it finishes.
 > "Python: Select Interpreter"), otherwise the editor reports every dependency
 > as missing while the code runs fine from the terminal.
 
-### Stage 4 (DeepFilterNet) is currently unavailable on Hopper GPUs
+### Verified platforms
 
-`deepfilternet` 0.5.6 uses `torchaudio.backend.common.AudioMetaData` and
-`torchaudio.info()`, both removed in torchaudio 2.1. It therefore requires
-`torchaudio<=2.0.2`, which pins `torch==2.0.1` — a CUDA 11.7 build supporting
-at most **sm_86**. This machine has an **H100 (sm_90)**, so that torch cannot
-execute any CUDA kernel, and the failure hits `stft.py` in Stage 1, killing the
-whole run.
+| Host | Arch | GPU | Stages 1–3 | Notes |
+|---|---|---|---|---|
+| x86_64 workstation | x86_64 | H100 (sm_90) | GPU | The original development host. |
+| NVIDIA Jetson Thor | **aarch64** | Thor (sm_110) | GPU | JetPack 7 / L4T R39, Ubuntu 24.04, CUDA 13.2. Verified 2026-07. |
 
-The environment therefore keeps **modern torch** so Stages 1–3 run GPU-accelerated,
-and `denoiser.py` raises a clear error if Stage 4 is invoked. Run with
-`--no-denoise` (all beamformer research is in Stages 1–3), or build a separate
-CPU/sm_86 environment with `torch==2.0.1, torchaudio==2.0.2` for Stage 4.
+**On aarch64 / Jetson Thor, `uv sync` just works — no special index needed.**
+This is worth stating explicitly because the usual assumption is the opposite:
+
+- Every locked dependency ships a `manylinux_2_28_aarch64` wheel (torch,
+  torchaudio, triton, numpy, scipy, soundfile, pyroomacoustics, numba,
+  deepfilterlib). The one exception is `pesq`, which is sdist-only and compiles
+  from source — `gcc`/`g++` must be present, and on a stock Ubuntu 24.04 image
+  they are.
+- The PyPI aarch64 torch wheel is built for SBSA, not Tegra, so it is fair to
+  expect it to fail on a Jetson iGPU. It does not: `torch 2.13.0+cu130` ships
+  `sm_110` in its arch list, and real kernels execute. **Verify this rather than
+  trusting `torch.cuda.is_available()`** — the characteristic Tegra failure is a
+  successful CUDA init followed by "no kernel image is available for execution
+  on the device" the moment a kernel actually runs:
+
+  ```bash
+  .venv/bin/python -c "
+  import torch
+  print(torch.cuda.get_arch_list(), torch.cuda.get_device_capability(0))
+  x = torch.randn(512, 512, device='cuda') @ torch.randn(512, 512, device='cuda')
+  torch.cuda.synchronize(); print('kernel OK', x.abs().sum().item())"
+  ```
+
+  If that ever fails on a future JetPack, the fallback is NVIDIA's Jetson torch
+  wheels — but that leaves `uv.lock` behind, so keep the locked `.venv` intact
+  as a reproducible reference and build the Jetson env alongside it.
+- `stft.py` resolves the device automatically and prints
+  `[stft] torch device: cuda` on the first STFT. If you see `cpu` there, torch
+  is not seeing the GPU and Stages 1–3 have silently fallen back to NumPy.
+
+Python 3.11 does not need to be installed system-wide — `uv sync` downloads a
+standalone aarch64 CPython 3.11 to satisfy `requires-python = "==3.11.*"`.
+
+### Stage 4 (DeepFilterNet) is unavailable in this environment
+
+Two independent things are described below. The first applies **everywhere**;
+the second is specific to the x86_64/H100 host and does **not** apply on Thor,
+where modern torch runs on the GPU natively.
+
+**1 — The API incompatibility (all platforms).** `deepfilternet` 0.5.6 uses
+`torchaudio.backend.common.AudioMetaData` and `torchaudio.info()`, both removed
+in torchaudio 2.1. It therefore requires `torchaudio<=2.0.2`, which pins
+`torch==2.0.1`. Since the locked environment carries modern torch, importing
+Stage 4 fails — `denoiser.py` detects this and raises a clear, actionable error
+rather than dying obscurely mid-run.
+
+**2 — Why we don't just pin the old pair (x86_64/H100 host only).**
+`torch==2.0.1` is a CUDA 11.7 build supporting at most **sm_86**. That host has
+an **H100 (sm_90)**, so that torch cannot execute any CUDA kernel, and the
+failure hits `stft.py` in Stage 1, killing the whole run. Downgrading is
+therefore not an option there. On Jetson Thor (sm_110) the same reasoning
+applies even more strongly.
+
+Either way: run with `--no-denoise` (all beamformer research is in Stages 1–3),
+or build a separate CPU environment with `torch==2.0.1, torchaudio==2.0.2` for
+Stage 4.
 
 Verified on CPU with the pinned pair, Stage 4 does work and helps substantially:
 SI-SDR +2.5 → **+16.5 dB**, PESQ 1.12 → 2.32, STOI 0.871 → 0.924.
