@@ -1,0 +1,255 @@
+{
+  "clip": "white_noise_taz+035_iaz+000_snr+0_rep00",
+  "reps": 2,
+  "n_frames": 11249,
+  "n_bins": 257,
+  "n_mics": 6,
+  "n_noise_frames": 619,
+  "n_speech_frames": 10630,
+  "stages": {
+    "STFT": 0.32133619050728157,
+    "DOA+steering": 0.6936303005204536,
+    "beamformer": 2.408740517566912,
+    "ISTFT": 0.12267737445654348
+  },
+  "beamformer_internals_per_call_us": {
+    "update_noise": 192.51243997132406,
+    "compute_weights": 106.46762239048257,
+    "apply": 6.106602377258241
+  },
+  "beamformer_internals_total_s": {
+    "update_noise": 0.1191652003422496,
+    "compute_weights": 1.1976542842705384,
+    "apply": 0.06869317014177796
+  },
+  "hotspots": {
+    "total_s": 5.159091291999999,
+    "rows": [
+      {
+        "func": "compute_weights",
+        "file": "beamformer_2.py",
+        "line": 922,
+        "ncalls": 10630,
+        "tottime": 0.883264357,
+        "cumtime": 1.6527104380000002,
+        "is_project": true
+      },
+      {
+        "func": "process_frame",
+        "file": "beamformer_2.py",
+        "line": 1245,
+        "ncalls": 11249,
+        "tottime": 0.502306692,
+        "cumtime": 3.3378447180000004,
+        "is_project": true
+      },
+      {
+        "func": "<built-in method numpy.core._multiarray_umath.c_einsum>",
+        "file": "~",
+        "line": 0,
+        "ncalls": 66256,
+        "tottime": 0.343182174,
+        "cumtime": 0.343182174,
+        "is_project": false
+      },
+      {
+        "func": "compute_steering_vector",
+        "file": "doa_2.py",
+        "line": 255,
+        "ncalls": 11249,
+        "tottime": 0.33416742800000004,
+        "cumtime": 0.508910198,
+        "is_project": true
+      },
+      {
+        "func": "_mean",
+        "file": "numpy/core/_methods.py",
+        "line": 101,
+        "ncalls": 65641,
+        "tottime": 0.227707398,
+        "cumtime": 0.521933168,
+        "is_project": false
+      },
+      {
+        "func": "<method 'astype' of 'numpy.ndarray' objects>",
+        "file": "~",
+        "line": 0,
+        "ncalls": 206290,
+        "tottime": 0.18780295700000002,
+        "cumtime": 0.18780295700000002,
+        "is_project": false
+      },
+      {
+        "func": "<method 'reduce' of 'numpy.ufunc' objects>",
+        "file": "~",
+        "line": 0,
+        "ncalls": 141855,
+        "tottime": 0.18601884500000002,
+        "cumtime": 0.18601884500000002,
+        "is_project": false
+      },
+      {
+        "func": "gaze_vector_to_theta",
+        "file": "doa_2.py",
+        "line": 194,
+        "ncalls": 11249,
+        "tottime": 0.17934191100000002,
+        "cumtime": 0.764038816,
+        "is_project": true
+      },
+      {
+        "func": "cross",
+        "file": "numpy/core/numeric.py",
+        "line": 1468,
+        "ncalls": 11249,
+        "tottime": 0.152617328,
+        "cumtime": 0.42145745900000003,
+        "is_project": false
+      },
+      {
+        "func": "<built-in method torch._C._fft.fft_rfft>",
+        "file": "~",
+        "line": 0,
+        "ncalls": 1,
+        "tottime": 0.12566444100000002,
+        "cumtime": 0.12566444100000002,
+        "is_project": false
+      },
+      {
+        "func": "_smooth_freq_axis",
+        "file": "beamformer_2.py",
+        "line": 190,
+        "ncalls": 10630,
+        "tottime": 0.114281005,
+        "cumtime": 0.11558454200000001,
+        "is_project": true
+      },
+      {
+        "func": "apply",
+        "file": "beamformer_2.py",
+        "line": 378,
+        "ncalls": 10630,
+        "tottime": 0.11156297000000001,
+        "cumtime": 0.23548312100000002,
+        "is_project": true
+      },
+      {
+        "func": "<method 'contiguous' of 'torch._C.TensorBase' objects>",
+        "file": "~",
+        "line": 0,
+        "ncalls": 1,
+        "tottime": 0.10572500500000001,
+        "cumtime": 0.10572500500000001,
+        "is_project": false
+      },
+      {
+        "func": "_count_reduce_items",
+        "file": "numpy/core/_methods.py",
+        "line": 67,
+        "ncalls": 65642,
+        "tottime": 0.09849083700000001,
+        "cumtime": 0.108969176,
+        "is_project": false
+      },
+      {
+        "func": "_delay_samples",
+        "file": "doa_2.py",
+        "line": 109,
+        "ncalls": 11249,
+        "tottime": 0.089027931,
+        "cumtime": 0.106435389,
+        "is_project": true
+      },
+      {
+        "func": "update_noise",
+        "file": "beamformer_2.py",
+        "line": 734,
+        "ncalls": 619,
+        "tottime": 0.08458691,
+        "cumtime": 0.149750298,
+        "is_project": true
+      },
+      {
+        "func": "normalize_axis_tuple",
+        "file": "numpy/core/numeric.py",
+        "line": 1330,
+        "ncalls": 67494,
+        "tottime": 0.08265483200000001,
+        "cumtime": 0.124373905,
+        "is_project": false
+      },
+      {
+        "func": "moveaxis",
+        "file": "numpy/core/numeric.py",
+        "line": 1393,
+        "ncalls": 33747,
+        "tottime": 0.082543393,
+        "cumtime": 0.240585562,
+        "is_project": false
+      },
+      {
+        "func": "process",
+        "file": "pipeline_2.py",
+        "line": 450,
+        "ncalls": 1,
+        "tottime": 0.079994304,
+        "cumtime": 5.159090559,
+        "is_project": true
+      },
+      {
+        "func": "_steered_das",
+        "file": "beamformer_2.py",
+        "line": 1200,
+        "ncalls": 10630,
+        "tottime": 0.079152337,
+        "cumtime": 0.114921568,
+        "is_project": true
+      },
+      {
+        "func": "<built-in method torch._C._nn.col2im>",
+        "file": "~",
+        "line": 0,
+        "ncalls": 2,
+        "tottime": 0.077873227,
+        "cumtime": 0.077873227,
+        "is_project": false
+      },
+      {
+        "func": "norm",
+        "file": "numpy/linalg/linalg.py",
+        "line": 2383,
+        "ncalls": 44997,
+        "tottime": 0.077865852,
+        "cumtime": 0.126221878,
+        "is_project": false
+      },
+      {
+        "func": "_stft_torch",
+        "file": "stft.py",
+        "line": 133,
+        "ncalls": 1,
+        "tottime": 0.07203090100000001,
+        "cumtime": 0.30350841900000003,
+        "is_project": true
+      },
+      {
+        "func": "<method 'conj' of 'numpy.ndarray' objects>",
+        "file": "~",
+        "line": 0,
+        "ncalls": 54391,
+        "tottime": 0.059770514000000004,
+        "cumtime": 0.059770514000000004,
+        "is_project": false
+      },
+      {
+        "func": "_phase_ref_mic0",
+        "file": "beamformer_2.py",
+        "line": 1144,
+        "ncalls": 10621,
+        "tottime": 0.052342937000000006,
+        "cumtime": 0.056703236000000004,
+        "is_project": true
+      }
+    ]
+  }
+}

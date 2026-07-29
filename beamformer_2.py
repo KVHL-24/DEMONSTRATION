@@ -186,6 +186,47 @@ POST_FLOOR    = 0.10    # minimum Wiener gain (prevents full nulling) (v5.0)
 
 SMOOTH_KERNEL = np.array([0.25, 0.50, 0.25], dtype=np.float64)   # 3-tap (v5.3)
 
+
+def _smooth_freq_axis(weights: np.ndarray, kernel: np.ndarray) -> np.ndarray:
+    """
+    Apply `kernel` along the frequency axis of a (n_bins, N) weight array,
+    for every microphone at once.
+
+    v7.9: this replaces a per-microphone Python loop that did two np.pad and
+    two np.convolve calls per mic per call:
+
+        for n in range(self.N):
+            wr = np.pad(weights[:, n].real, 1, mode='edge')
+            wi = np.pad(weights[:, n].imag, 1, mode='edge')
+            weights[:, n] = (np.convolve(wr, k, mode='valid') +
+                             1j * np.convolve(wi, k, mode='valid'))
+
+    That loop was the single largest hotspot in the whole pipeline —
+    cProfile counted 127,560 np.pad calls in one 60 s / 6-mic clip, roughly
+    25% of total runtime, because each call re-pays NumPy's dispatch cost to
+    smooth just 257 values. The kernel is separable and identical for every
+    microphone, so the entire loop collapses into three slice-adds over the
+    whole array. Measured end-to-end speedup: 1.47x. See runtime_profile/.
+
+    The result is BIT-IDENTICAL to the loop, not merely close:
+      • np.convolve reverses its kernel, so the taps are indexed in reverse
+        order here (k[2] multiplies the leading slice) to match exactly.
+      • mode='edge' padding by one sample is exactly a replicated first and
+        last row, which is what the concatenate below builds.
+      • Real and imaginary parts are smoothed by the same real kernel, so
+        doing it on the complex array in one step is the same arithmetic.
+    runtime_profile/bench_optimizations.py asserts this equivalence
+    end-to-end (max|Δ| = 0.0) before reporting any timing.
+    """
+    if kernel.shape != (3,):
+        raise ValueError(
+            f"_smooth_freq_axis is specialised for a 3-tap kernel; got "
+            f"shape {kernel.shape}. Update this function (and its "
+            f"equivalence test) if SMOOTH_KERNEL changes length.")
+    k0, k1, k2 = float(kernel[0]), float(kernel[1]), float(kernel[2])
+    padded = np.concatenate((weights[:1], weights, weights[-1:]), axis=0)
+    return k2 * padded[:-2] + k1 * padded[1:-1] + k0 * padded[2:]
+
 # v6.0: target-direction projection guard on noise-frame covariance updates
 #
 # v7.3 fix — disabled by default (root cause of the pink/white-noise
@@ -1063,12 +1104,10 @@ class MVDRBeamformer:
             weights = weights * mic_mask.astype(np.complex64)[None, :]
 
         # ── v5.3 : mild frequency-axis smoothing ──────────────────────────
+        # v7.9: vectorised over all mics at once — see _smooth_freq_axis().
+        # Bit-identical to the per-mic np.pad/np.convolve loop it replaces.
         k = SMOOTH_KERNEL.astype(np.float32)
-        for n in range(self.N):
-            wr = np.pad(weights[:, n].real, 1, mode='edge')
-            wi = np.pad(weights[:, n].imag, 1, mode='edge')
-            weights[:, n] = (np.convolve(wr, k, mode='valid') +
-                             1j * np.convolve(wi, k, mode='valid'))
+        weights = _smooth_freq_axis(weights, k).astype(np.complex64)
 
         # ── v7.0 : restore the distortionless constraint after smoothing ───
         # Each bin's pre-smoothing weight satisfied a[f]^H w[f] = 1 exactly,

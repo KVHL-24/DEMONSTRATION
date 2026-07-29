@@ -1,0 +1,17 @@
+{
+  "clip": "white_noise_taz+035_iaz+000_snr+0_rep00",
+  "results": {
+    "baseline (pre-v7.9 loop)": {
+      "time_s": 5.593945658998564,
+      "speedup": 1.0,
+      "equivalent": true,
+      "rel_err": 0.0
+    },
+    "shipping (vectorised)": {
+      "time_s": 3.7717120440211147,
+      "speedup": 1.4831316902535119,
+      "equivalent": true,
+      "rel_err": 0.0
+    }
+  }
+}

@@ -207,3 +207,16 @@ log. Worth reading before changing anything:
 **Open issue**: the beamformer still loses to `raw_mic` by 3–6 dB at +20 dB
 input SNR across every mode and scenario. See the `mic_selection.py` module
 docstring for the current hypothesis.
+
+## Performance
+
+`beamformer_2.py` v7.9 vectorized the frequency-axis weight smoothing, which
+was a per-microphone `np.pad`/`np.convolve` loop and the single largest
+hotspot in the pipeline (~25% of runtime). End-to-end speedup **1.51x**, with
+output bit-identical to the previous implementation.
+
+See [runtime_profile/](runtime_profile/) for the profiling suite that found
+it, the figures, and the equivalence tests that guard it. Notable finding:
+the GPU does not help here (only Stage 1 is batched; Stages 2–3 are
+sequential), and reducing the microphone count pays far less than O(N²)
+suggests — ~46% of the MVDR core's cost is N-independent overhead.
