@@ -32,6 +32,17 @@ All numbers below are from the cached 30 s sweeps in `sweep_cache/`.
 | ② cheap wins | white noise, +10 dB (easy) | full vs 3 mic + stride 4 + gate | Gate engages on **68%** of frames, duty collapses, energy **179 → 15 mJ/s (11.7x)** — for −0.9 dB on a clip already at ~10 dB SI-SDR. A fixed full config burns power for nothing here. |
 | ③ …but not always | back to the ① clip | **same cheap B as ②** | On 17° separation the cheap config lands at **−0.42 dB — worse than doing nothing** — while full holds +0.53. Nulling a nearby interferer needs the whole aperture. Configuration must follow the sample — that is the product. |
 
+| ④ you steer | directional mid, **moving target** (~27° span), +10 dB | gaze vs **manual** (a slider), rest equal | The free-play closer, not part of the argument chain: set a side's steering to *manual (you)* and chase the moving target with the azimuth slider. The gray **ghost ray** shows where the recorded eyes point; the *hand vs eyes* readout accumulates your average pointing error. The point partners take away: any scheme that needs the direction *told* to it (buttons, apps, remotes) trails the conversation — the eyes do it for free. |
+
+Manual steering notes: the direction is per-frame *data*, not
+configuration — dragging the slider never restarts the clip (switching a
+side *into* manual mode does, like any config change). Your aim also
+survives ⟲/preset reloads. Dragging onto the interferer makes the MVDR
+treat the true talker as noise — you will hear the interferer enhanced
+and the talker suppressed; that is the system working, not a bug. Nulls
+take ~1–2 s to migrate after a large jump (recursive R_nn), so fast
+scrubbing shows the beam lagging the ray — also real physics.
+
 Close with **⚡ SWEEP**: the Pareto plot shows the whole trade space on
 hardware-measured energy. Bonus talking point from the sweeps: on the
 *hard dynamic* clip (cocktail −15) the cheap config actually **wins**

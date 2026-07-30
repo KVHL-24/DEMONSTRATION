@@ -106,8 +106,52 @@ class _Handler(BaseHTTPRequestHandler):
                 wav = self.engine.audio_wav(which)
             except Exception as e:                        # noqa: BLE001
                 return self._json({"ok": False, "reason": str(e)}, 400)
-            return self._send(200, wav, "audio/wav")
+            return self._send_ranged(wav, "audio/wav")
         return self._send(404, b"not found", "text/plain")
+
+    def _send_ranged(self, body: bytes, ctype: str) -> None:
+        """Serve with HTTP Range support. Media elements seek by issuing
+        Range requests; answering those with a 200 full-body makes Firefox
+        stall at the seek point waiting for bytes that never map (the
+        'progress bar freezes at the resume position' bug)."""
+        rng = self.headers.get("Range")
+        total = len(body)
+        if rng and rng.startswith("bytes="):
+            try:
+                spec = rng[len("bytes="):].split(",")[0].strip()
+                s, _, e = spec.partition("-")
+                if s == "":                     # suffix form: bytes=-N
+                    start = max(0, total - int(e))
+                    end = total - 1
+                else:
+                    start = int(s)
+                    end = int(e) if e else total - 1
+                end = min(end, total - 1)
+                if start > end or start >= total:
+                    raise ValueError
+            except ValueError:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{total}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            chunk = body[start:end + 1]
+            self.send_response(206)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(chunk)))
+            self.send_header("Content-Range", f"bytes {start}-{end}/{total}")
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(chunk)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(total))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_POST(self) -> None:                            # noqa: N802
         if self.path.split("?", 1)[0] != "/control":
@@ -133,6 +177,9 @@ class _Handler(BaseHTTPRequestHandler):
                 st = eng.restart()
             elif action == "speed":
                 st = eng.set_speed(float(req.get("speed", 1.0)))
+            elif action == "manual_gaze":
+                st = eng.set_manual_az(str(req.get("side", "")),
+                                       float(req.get("az_deg", 0.0)))
             elif action == "sweep":
                 st = self._start_sweep(bool(req.get("no_cache", False)))
             else:

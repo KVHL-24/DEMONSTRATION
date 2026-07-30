@@ -26,6 +26,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from stft import stft_multichannel, istft, make_window   # noqa: E402
+from doa_2 import gaze_vector_to_theta                   # noqa: E402
 from configs import PipeConfig, build_pipeline           # noqa: E402
 from probes import BeamPatternProbe, spec_column         # noqa: E402
 
@@ -126,17 +127,29 @@ class Side:
         self.gated_frames = 0
         self.si_sdr: 'float | None' = None       # sliding-window, ~1 Hz
         self.si_sdr_delta: 'float | None' = None  # vs raw mic 0, same window
+        # operator-set azimuth, radians; only read when steering == 'manual'.
+        # Set as an attribute (not a process() parameter) so subclasses that
+        # override process() with the original signature keep working.
+        self.manual_az = 0.0
         # cumulative (whole clip so far) — the number that settles and lets
         # A/B be compared at a glance; built incrementally, see _extend_out()
         self._out_buf = np.zeros(0, dtype=np.float32)
         self._out_frames = 0
+        # engine thread (SI-SDR refresh) and HTTP threads (audio download)
+        # both extend/read the buffer
+        self._out_lock = threading.Lock()
         self.si_sdr_cum: 'float | None' = None
         self.si_sdr_cum_delta: 'float | None' = None
 
     def process(self, Xk: np.ndarray, gaze_vec: np.ndarray,
                 speech: bool) -> None:
         x = Xk[: self.cfg.n_mics]
-        g = gaze_vec if self.cfg.steering == "gaze" else None
+        if self.cfg.steering == "gaze":
+            g = gaze_vec
+        elif self.cfg.steering == "manual":
+            g = float(self.manual_az)          # scalar azimuth, radians
+        else:                                  # srp
+            g = None
         t0 = time.perf_counter()
         y = self.pipe.process_frame(x, gaze=g, speech_override=speech)
         dt = time.perf_counter() - t0
@@ -187,17 +200,18 @@ class Side:
         covered by exactly two frames); only the fully-covered new samples
         are appended. Display-only, so a sub-sample seam imperfection at the
         very first chunk is irrelevant."""
-        n = len(self.Y)
-        if n <= self._out_frames:
-            return
-        a = max(0, self._out_frames - 1)
-        Yc = np.stack(self.Y[a:n], axis=1)
-        chunk = istft(Yc, window=clip.window, n_fft=N_FFT, hop=HOP)
-        skip = (self._out_frames - a) * HOP
-        keep = (n - self._out_frames) * HOP
-        new = chunk[skip: skip + keep]
-        self._out_buf = np.concatenate([self._out_buf, new])
-        self._out_frames = n
+        with self._out_lock:
+            n = len(self.Y)
+            if n <= self._out_frames:
+                return
+            a = max(0, self._out_frames - 1)
+            Yc = np.stack(self.Y[a:n], axis=1)
+            chunk = istft(Yc, window=clip.window, n_fft=N_FFT, hop=HOP)
+            skip = (self._out_frames - a) * HOP
+            keep = (n - self._out_frames) * HOP
+            new = chunk[skip: skip + keep]
+            self._out_buf = np.concatenate([self._out_buf, new])
+            self._out_frames = n
 
     def refresh_si_sdr(self, clip: 'Clip') -> None:
         """Sliding-window + cumulative SI-SDR vs the reverberant reference
@@ -228,12 +242,17 @@ class Side:
                 None if self.si_sdr_cum is None or base_c is None
                 else self.si_sdr_cum - base_c)
 
-    def audio_out(self, window, upto_frame: 'int | None' = None) -> np.ndarray:
-        n = len(self.Y) if upto_frame is None else min(upto_frame, len(self.Y))
-        if n == 0:
-            return np.zeros(0, dtype=np.float32)
-        Y = np.stack(self.Y[:n], axis=1)               # (B, n)
-        return istft(Y, window=window, n_fft=N_FFT, hop=HOP)
+    def audio_out(self, clip: 'Clip',
+                  upto_frame: 'int | None' = None) -> np.ndarray:
+        """Time-domain output up to upto_frame, served from the incremental
+        buffer. Only the frames produced since the last call are ISTFT'd —
+        the old full-history recompute made every listen request cost 1–2 s
+        by the end of a clip (twice, counting the seek's Range request)."""
+        self._extend_out(clip)
+        with self._out_lock:
+            n = (self._out_frames if upto_frame is None
+                 else min(upto_frame, self._out_frames))
+            return self._out_buf[: n * HOP].copy()
 
 
 # ── Engine ───────────────────────────────────────────────────────────────────
@@ -254,6 +273,9 @@ class Engine:
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._generation = 0               # bumped on every rebuild
+        # operator azimuths (radians) — engine-level so they survive
+        # rebuilds/restarts: your aim is not part of the causal clip state
+        self._manual_az = {"A": 0.0, "B": 0.0}
 
     # ── control (called from HTTP threads) ────────────────────────────────
 
@@ -297,6 +319,20 @@ class Engine:
             self._speed = max(0.0, float(speed))
             return self.status()
 
+    def set_manual_az(self, side: str, az_deg: float) -> dict:
+        """Live steering input — deliberately NO rebuild/restart: direction
+        is per-frame data (like real gaze), not configuration."""
+        with self._lock:
+            if side not in ("A", "B"):
+                raise ValueError("side must be A or B")
+            az = float(az_deg)
+            if not -180.0 <= az <= 180.0:
+                raise ValueError("az_deg out of range")
+            self._manual_az[side] = float(np.deg2rad(az))
+            if self._sides is not None and side in self._sides:
+                self._sides[side].manual_az = self._manual_az[side]
+            return self.status()
+
     def status(self) -> dict:
         clip = self._clip
         return {
@@ -316,6 +352,8 @@ class Engine:
             "playing": self._playing,
             "frame": self._frame,
             "speed": self._speed,
+            "manual_az_deg": {s: round(float(np.degrees(v)), 1)
+                              for s, v in self._manual_az.items()},
         }
 
     def audio_wav(self, which: str) -> bytes:
@@ -330,7 +368,7 @@ class Engine:
         else:
             if sides is None or which not in sides:
                 raise RuntimeError(f"no side {which}")
-            x = sides[which].audio_out(clip.window, upto)
+            x = sides[which].audio_out(clip, upto)
         buf = _io.BytesIO()
         sf.write(buf, np.asarray(x, dtype=np.float32), FS, format="WAV")
         return buf.getvalue()
@@ -339,6 +377,8 @@ class Engine:
 
     def _rebuild(self) -> None:
         self._sides = {s: Side(s, c) for s, c in self._cfgs.items()}
+        for s, side in self._sides.items():
+            side.manual_az = self._manual_az[s]
         self._frame = 0
         self._generation += 1
         self.hub.broadcast(self.status())
@@ -395,6 +435,10 @@ class Engine:
                 "shared": {
                     "vad": bool(clip.vad[end - 1]),
                     "in_spec": spec_column(clip.X[:, :, end - 1]),
+                    # where the RECORDED eyes point right now — the ghost
+                    # ray / hand-vs-eyes reference for manual steering
+                    "gaze_az_deg": round(float(np.degrees(
+                        gaze_vector_to_theta(clip.gaze[end - 1], None))), 1),
                 },
                 "sides": {s: side.telemetry()
                           for s, side in sides.items()},

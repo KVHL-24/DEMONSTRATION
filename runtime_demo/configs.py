@@ -6,6 +6,8 @@ compare. `build_pipeline()` turns it into a ready AriaDenoisingPipeline
 
 The knob set mirrors PLAN.md:
     steering       'gaze' (oracle gaze vectors) | 'srp' (GCC-PHAT+SRP)
+                   | 'manual' (operator-set azimuth, fed per frame by the
+                     engine through the same scalar-gaze input path)
     n_mics         2..6  — leading subset of the array
     weight_stride  recompute MVDR weights every k-th speech frame
     gate           SNR bypass gate (stages 2–3 skipped on easy stretches)
@@ -43,8 +45,9 @@ class PipeConfig:
     micsel:        bool = False
 
     def validate(self) -> "PipeConfig":
-        if self.steering not in ("gaze", "srp"):
-            raise ValueError(f"steering must be gaze|srp, got {self.steering!r}")
+        if self.steering not in ("gaze", "srp", "manual"):
+            raise ValueError(
+                f"steering must be gaze|srp|manual, got {self.steering!r}")
         if not 2 <= int(self.n_mics) <= SYNTH_MIC_POSITIONS_2D.shape[0]:
             raise ValueError(f"n_mics out of range: {self.n_mics}")
         if int(self.weight_stride) < 1:
@@ -91,7 +94,10 @@ def mic_positions(n_mics: int):
 def build_pipeline(cfg: PipeConfig) -> tuple[AriaDenoisingPipeline, FrameTap]:
     cfg.validate()
     tap = FrameTap()
-    use_gaze = cfg.steering == "gaze"
+    # 'manual' rides the gaze input path: the engine feeds the operator's
+    # azimuth as a per-frame scalar gaze. The stabilizer is gaze-only —
+    # smoothing a hand-set constant would just add lag.
+    use_gaze = cfg.steering in ("gaze", "manual")
     pipe = AriaDenoisingPipeline(
         use_gaze=use_gaze,
         mic_pos=mic_positions(cfg.n_mics),
@@ -99,7 +105,7 @@ def build_pipeline(cfg: PipeConfig) -> tuple[AriaDenoisingPipeline, FrameTap]:
         vad_thr_db=VAD_THR_DB,
         rt60_s=RT60_S,
         doa_reliable=False,
-        use_gaze_stabilizer=cfg.gazestab and use_gaze,
+        use_gaze_stabilizer=cfg.gazestab and cfg.steering == "gaze",
         use_mic_selection=cfg.micsel,
         weight_stride=int(cfg.weight_stride),
         use_bypass_gate=bool(cfg.gate),

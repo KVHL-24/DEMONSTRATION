@@ -77,6 +77,7 @@
     <button class="preset" id="p1">① eyes beat ears</button>
     <button class="preset" id="p2">② cheap wins</button>
     <button class="preset" id="p3">③ …but not always</button>
+    <button class="preset" id="p4">④ you steer</button>
     <span style="width:14px"></span>
     <select id="clipSel" title="clip"></select>
     <button id="btnPlay" class="primary">▶ Play</button>
@@ -93,7 +94,17 @@
         <h3><span class="dot" style="background:var(--a)"></span>Config A
             <span class="gatechip" id="gateA">GATED</span></h3>
         <div class="row"><span>steering</span><select data-side="A" data-k="steering">
-          <option value="gaze">gaze</option><option value="srp">SRP (acoustic)</option></select></div>
+          <option value="gaze">gaze</option><option value="srp">SRP (acoustic)</option>
+          <option value="manual">manual (you)</option></select></div>
+        <div id="manrowA" style="display:none; border:1px solid var(--edge);
+             border-radius:6px; padding:5px 7px; margin:5px 0">
+          <div style="display:flex; justify-content:space-between">
+            <span>manual azimuth</span><b id="manvalA">0°</b></div>
+          <input type="range" id="manslA" min="-180" max="180" step="1" value="0"
+                 style="width:100%">
+          <div class="lbl" style="color:var(--dim); font-size:11px"
+               id="manerrA">hand vs eyes: —</div>
+        </div>
         <div class="row"><span>microphones</span><select data-side="A" data-k="n_mics">
           <option>6</option><option>5</option><option>4</option><option>3</option><option>2</option></select></div>
         <div class="row"><span>weight stride</span><select data-side="A" data-k="weight_stride">
@@ -125,6 +136,7 @@
         <span class="chip"><span class="dot" style="background:var(--b)"></span>B <span id="shortB"></span></span>
         <span class="chip"><span class="dot" style="background:var(--target)"></span>target</span>
         <span class="chip"><span class="dot" style="background:var(--interf)"></span>interferer</span>
+        <span class="chip"><span class="dot" style="background:#9198a1"></span>eyes (ghost, manual mode)</span>
       </div>
     </div>
 
@@ -133,7 +145,17 @@
         <h3><span class="dot" style="background:var(--b)"></span>Config B
             <span class="gatechip" id="gateB">GATED</span></h3>
         <div class="row"><span>steering</span><select data-side="B" data-k="steering">
-          <option value="gaze">gaze</option><option value="srp">SRP (acoustic)</option></select></div>
+          <option value="gaze">gaze</option><option value="srp">SRP (acoustic)</option>
+          <option value="manual">manual (you)</option></select></div>
+        <div id="manrowB" style="display:none; border:1px solid var(--edge);
+             border-radius:6px; padding:5px 7px; margin:5px 0">
+          <div style="display:flex; justify-content:space-between">
+            <span>manual azimuth</span><b id="manvalB">0°</b></div>
+          <input type="range" id="manslB" min="-180" max="180" step="1" value="0"
+                 style="width:100%">
+          <div class="lbl" style="color:var(--dim); font-size:11px"
+               id="manerrB">hand vs eyes: —</div>
+        </div>
         <div class="row"><span>microphones</span><select data-side="B" data-k="n_mics">
           <option>6</option><option>5</option><option>4</option><option>3</option><option>2</option></select></div>
         <div class="row"><span>weight stride</span><select data-side="B" data-k="weight_stride">
@@ -191,6 +213,8 @@
     <button data-au="B" style="border-color:var(--b)"
             title="config B's processed output">B output</button>
     <audio id="player" controls style="height:28px"></audio>
+    <span id="nowPlaying" style="font-size:12.5px; font-weight:600;
+          color:var(--dim); min-width:130px">nothing playing</span>
     <span class="lbl" style="color:var(--dim); font-size:11px">
       plays what has been processed so far, in this browser</span>
   </div>
@@ -218,6 +242,13 @@ const PRESETS = {
   p3: { clip: "babble_taz-007_iaz-025_snr-10_rep00",
         A: {steering:"gaze", n_mics:6, weight_stride:1, gate:false},
         B: {steering:"gaze", n_mics:3, weight_stride:4, gate:true} },
+  // ④ you steer — moving target (~27° span), eyes vs your hand on a slider.
+  // manual az initialized to the target's STARTING azimuth: you begin on
+  // target and fall behind as it moves. manualInit matches taz+007.
+  p4: { clip: "directional_mid_dynamic_taz+007_iaz-130_snr+10_rep00",
+        A: {steering:"gaze",   n_mics:6, weight_stride:1, gate:false},
+        B: {steering:"manual", n_mics:6, weight_stride:1, gate:false},
+        manualInit: {side: "B", az_deg: 7} },
 };
 
 async function post(body) {
@@ -229,10 +260,36 @@ async function applyPreset(p) {
   await post({action: "load", clip: p.clip});
   await post({action: "config", side: "A", cfg: p.A});
   await post({action: "config", side: "B", cfg: p.B});
+  if (p.manualInit)
+    await post({action: "manual_gaze", side: p.manualInit.side,
+                az_deg: p.manualInit.az_deg});
   await post({action: "play"});
 }
-for (const k of ["p1", "p2", "p3"])
+for (const k of ["p1", "p2", "p3", "p4"])
   $(k).onclick = () => applyPreset(PRESETS[k]);
+
+// ── manual steering sliders ────────────────────────────────────────────────
+const manErrEMA = {A: null, B: null};
+for (const s of ["A", "B"]) {
+  const sl = $("mansl" + s);
+  let pending = null, inflight = false;
+  const send = async () => {
+    if (inflight || pending === null) return;
+    const az = pending; pending = null; inflight = true;
+    try { await post({action: "manual_gaze", side: s, az_deg: az}); }
+    finally { inflight = false; send(); }        // drain latest
+  };
+  sl.oninput = () => {
+    $("manval" + s).textContent = sl.value + "°";
+    manErrEMA[s] = null;                          // aim changed → restart avg
+    pending = parseFloat(sl.value);
+    send();
+  };
+}
+function angDiff(a, b) {
+  let d = Math.abs(a - b) % 360;
+  return d > 180 ? 360 - d : d;
+}
 
 $("btnPlay").onclick    = () => post({action: "play"});
 $("btnPause").onclick   = () => post({action: "pause"});
@@ -258,22 +315,112 @@ function syncSelects() {
   for (const side of ["A", "B"]) {
     const cfg = state.configs[side];
     document.querySelectorAll(`.cfg select[data-side="${side}"]`).forEach(s => {
-      const k = s.dataset.k;
-      const v = k === "gate" ? String(cfg[k]) : String(cfg[k]);
+      const v = String(cfg[s.dataset.k]);
       if (s.value !== v) s.value = v;
     });
+    // manual slider row: visible only in manual mode, value from engine
+    const manual = cfg.steering === "manual";
+    $("manrow" + side).style.display = manual ? "block" : "none";
+    if (manual && state.manual_az_deg) {
+      const sl = $("mansl" + side);
+      if (document.activeElement !== sl) {        // don't fight the drag
+        sl.value = state.manual_az_deg[side];
+        $("manval" + side).textContent = Math.round(sl.value) + "°";
+      }
+    }
   }
 }
 
 // ── listen ─────────────────────────────────────────────────────────────────
+// ── listen: prefetch + instant switching ────────────────────────────────────
+// While the engine is NOT playing (paused / clip finished — when A/B
+// comparison listening actually happens), the three WAVs are prefetched
+// into blobs; pressing a button then swaps an in-memory source: instant,
+// and seeks need no Range round-trip. During live playback the buttons
+// fall back to the direct URL (audio grows every second — a prefetch
+// would be stale immediately).
+const auCache = {};            // which -> {url, frame, clip}
+let prefetchBusy = false;
+function cacheFresh(entry) {
+  return entry && state && !state.playing && state.clip
+      && entry.frame === state.frame && entry.clip === state.clip.name
+      && entry.frame > 187;                 // ≥1 s of audio, see below
+}
+async function prefetchAudio() {
+  if (prefetchBusy || !state || state.playing || !state.clip) return;
+  // Nothing meaningful processed yet (fresh load/restart, frame ≈ 0):
+  // caching here stores a zero-length WAV that later plays as a frozen
+  // progress bar. Skip until at least ~1 s exists.
+  if (state.frame < 187) return;
+  const frame = state.frame, clipName = state.clip.name;
+  prefetchBusy = true;
+  try {
+    for (const w of ["in", "A", "B"]) {
+      const old = auCache[w];
+      if (old && old.frame === frame && old.clip === clipName) continue;
+      const r = await fetch(`/audio/${w}.wav?ts=${frame}`);
+      if (!r.ok) continue;
+      const blob = await r.blob();
+      auCache[w] = {url: URL.createObjectURL(blob), frame, clip: clipName};
+      // Never revoke a URL the player is still using — Firefox halts
+      // playback of a revoked blob mid-stream. A superseded-but-playing
+      // URL just leaks until the next page load, which is fine.
+      if (old && old.url !== $("player").src) URL.revokeObjectURL(old.url);
+    }
+  } finally { prefetchBusy = false; }
+}
+
+const AU_LABEL = {in: ["input (raw mic)", "--dim"],
+                  A:  ["A output", "--a"],
+                  B:  ["B output", "--b"]};
+function setNowPlaying(which) {   // null = stopped
+  const el = $("nowPlaying");
+  document.querySelectorAll(".listen button").forEach(b => {
+    b.style.background = (which !== null && b.dataset.au === which)
+        ? "#2d333b" : "";
+    b.style.fontWeight = (which !== null && b.dataset.au === which)
+        ? "700" : "";
+  });
+  if (which === null) {
+    el.textContent = "paused"; el.style.color = getCSS("--dim");
+  } else {
+    const [label, colorVar] = AU_LABEL[which];
+    el.textContent = "▶ " + label;
+    el.style.color = getCSS(colorVar);
+  }
+}
+let currentAu = null;
+$("player").addEventListener("pause", () => setNowPlaying(null));
+$("player").addEventListener("ended", () => setNowPlaying(null));
+$("player").addEventListener("play",
+  () => { if (currentAu) setNowPlaying(currentAu); });
+
 document.querySelectorAll(".listen button").forEach(btn => {
-  btn.onclick = async () => {
-    const r = await fetch(`/audio/${btn.dataset.au}.wav`);
-    if (!r.ok) return;
-    const blob = await r.blob();
+  btn.onclick = () => {
     const player = $("player");
-    player.src = URL.createObjectURL(blob);
-    player.play();
+    currentAu = btn.dataset.au;
+    setNowPlaying(currentAu);
+    // A/B/input switching resumes at the current position — restarting at
+    // 0:00 would make same-passage comparison impossible. (The sources are
+    // sample-aligned: all three are cuts of the same clip timeline.)
+    const pos = player.currentTime || 0;
+    const cached = auCache[btn.dataset.au];
+    // play() stays INSIDE the click's synchronous context (Firefox's
+    // autoplay policy rejects it silently when it trails the gesture).
+    player.src = cacheFresh(cached)
+        ? cached.url
+        : `/audio/${btn.dataset.au}.wav?ts=${Date.now()}`;
+    player.play().catch(() => {
+      $("status").textContent =
+        "browser blocked playback — press ▶ on the audio player";
+    });
+    // Seek once the duration is known (fires before audible playback).
+    // Resume only if the new source reaches that far; else start at 0.
+    player.addEventListener("loadedmetadata", () => {
+      if (pos > 0.2 && isFinite(player.duration)
+          && pos < player.duration - 0.5)
+        player.currentTime = pos;
+    }, {once: true});
   };
 });
 
@@ -301,6 +448,7 @@ es.onmessage = ev => {
     $("status").textContent = (m.playing ? "playing " : "paused ") +
       (m.clip ? `· ${m.clip.scenario} ${m.clip.snr_db} dB · sep ${Math.round(m.clip.sep_deg)}°` : "");
     syncSelects();
+    if (!m.playing) setTimeout(prefetchAudio, 300);   // idle → warm the cache
   } else if (m.type === "telemetry") {
     last = m;
     $("clock").textContent = m.t.toFixed(1) + " s";
@@ -320,6 +468,16 @@ es.onmessage = ev => {
         (d.si_sdr === null ? "" : ` · window ${d.si_sdr.toFixed(1)}`) +
         (d.gate_frac ? ` · gated ${(d.gate_frac * 100).toFixed(0)}%` : "");
       $("gate" + s).classList.toggle("on", d.gated);
+      // hand-vs-eyes rolling error for manual sides
+      if (d.cfg && d.cfg.steering === "manual" && d.theta_deg !== null
+          && m.shared.gaze_az_deg !== undefined) {
+        const err = angDiff(d.theta_deg, m.shared.gaze_az_deg);
+        manErrEMA[s] = manErrEMA[s] === null ? err
+                     : 0.95 * manErrEMA[s] + 0.05 * err;
+        $("manerr" + s).textContent =
+          `hand vs eyes: ${manErrEMA[s].toFixed(0)}° avg ` +
+          `(eyes at ${m.shared.gaze_az_deg.toFixed(0)}°)`;
+      }
     }
     updateVerdict(m);
     drawSpecColumn(m.shared.in_spec);
@@ -412,6 +570,12 @@ function draw() {
     drawRay(state.clip.interf_az, getCSS("--interf"), cx, cy, R, [6, 4]);
   }
   if (last) {
+    // ghost ray: where the recorded eyes point — drawn only when some side
+    // is manually steered, as the reference the hand is chasing
+    const anyManual = ["A", "B"].some(
+      s => last.sides[s].cfg && last.sides[s].cfg.steering === "manual");
+    if (anyManual && last.shared.gaze_az_deg !== undefined)
+      drawRay(last.shared.gaze_az_deg, "#9198a1", cx, cy, R, [10, 5]);
     drawPattern(last.sides.A.beam, getCSS("--a"), cx, cy, R);
     drawPattern(last.sides.B.beam, getCSS("--b"), cx, cy, R);
     drawRay(last.sides.A.theta_deg, getCSS("--a"), cx, cy, R, [2, 4]);
