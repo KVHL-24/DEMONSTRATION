@@ -5,6 +5,7 @@ pipeline_2.py — Full Audio Denoising Pipeline
 """
 
 from __future__ import annotations
+import time
 import numpy as np
 
 from stft       import stft_multichannel, istft, make_window, F_WIN, HOP, FS
@@ -188,6 +189,11 @@ class AriaDenoisingPipeline:
                  use_mic_selection: bool          = False,
                  mic_selector_kwargs: dict | None = None,
                  use_projection_guard: bool       = False,
+                 weight_stride:     int           = 1,
+                 use_bypass_gate:   bool          = False,
+                 gate_on_db:        float         = 15.0,
+                 gate_off_db:       float         = 10.0,
+                 observer:          'object|None' = None,
                  verbose:           bool  = False):
         """
         use_gaze_stabilizer : (bug fix) actually apply gaze_processing.
@@ -211,6 +217,30 @@ class AriaDenoisingPipeline:
                     so mic_selector could never fire even if attached.
         mic_selector_kwargs : optional kwargs forwarded to
                     AdaptiveMicSelector (e.g. {'K_min': 3}).
+        weight_stride : (v8.0, runtime_demo) recompute MVDR weights only
+                    every k-th speech frame, reusing them in between.
+                    1 (default) is bit-identical to previous behaviour.
+                    See MVDRBeamformer.weight_stride.
+        use_bypass_gate : (v8.0, runtime_demo) when the beamformer's causal
+                    SNR estimate exceeds gate_on_db, bypass stages 2–3
+                    entirely and pass mic 0 through unprocessed (same
+                    passthrough the warmup period already uses), until the
+                    estimate falls back below gate_off_db (hysteresis).
+                    The SNR EMAs keep updating during a bypass stretch —
+                    via MVDRBeamformer.update_snr_stats() — so the gate
+                    can re-close; R_nn⁻¹ does NOT update while bypassed,
+                    and stored weights are invalidated on re-close.
+                    Default False: no behaviour change.
+        gate_on_db / gate_off_db : bypass-gate hysteresis thresholds (dB
+                    estimated input SNR). on > off, or the gate chatters.
+        observer : (v8.0, runtime_demo) optional callable
+                    observer(frame_idx: int, data: dict) invoked once per
+                    STFT frame AFTER the frame is processed, from both
+                    process() and process_frame(). data holds references
+                    (NOT copies — copy before storing) to per-frame
+                    internals: speech flag, theta/phi, steering d, MVDR
+                    weights, mic mask, gate state, and stage timings in
+                    µs. None (default): zero overhead, no timing calls.
         use_projection_guard : forwarded to MVDRBeamformer (v6.0 steering-
                     vector projection guard on noise-frame updates,
                     default OFF — see beamformer_2.py's PROJECTION_GUARD
@@ -329,7 +359,18 @@ class AriaDenoisingPipeline:
 
         self.beamformer = MVDRBeamformer(self.N, n_fft=n_fft, alpha=alpha,
                                          mic_selector=self.mic_selector,
-                                         use_projection_guard=use_projection_guard)
+                                         use_projection_guard=use_projection_guard,
+                                         weight_stride=weight_stride)
+
+        # ── v8.0 (runtime_demo): SNR bypass gate + observer ────────────────
+        self.use_bypass_gate = bool(use_bypass_gate)
+        self.gate_on_db      = float(gate_on_db)
+        self.gate_off_db     = float(gate_off_db)
+        self._gate_open        = False
+        self._gate_frames      = 0     # frames bypassed (diagnostics)
+        self._gate_transitions = 0
+        self.observer = observer
+        self._stream_frame_idx = 0     # observer frame index (streaming path)
 
         if atf_steering is not None:
             self.beamformer.init_diffuse(atf_steering.H_rel)
@@ -445,6 +486,40 @@ class AriaDenoisingPipeline:
 
         return d, theta, phi
 
+    # ── v8.0 (runtime_demo): SNR bypass gate ─────────────────────────────────
+
+    def _gate_check(self, X_frame: np.ndarray, speech: bool) -> bool:
+        """Decide whether THIS frame bypasses stages 2–3 entirely.
+
+        Called before any steering/beamforming work. Hysteresis: opens above
+        gate_on_db, closes below gate_off_db. While open, the beamformer is
+        never invoked, so its v7.0 SNR EMAs are fed from here instead —
+        otherwise the estimate would freeze at its gate-opening value and
+        the gate could never close. R_nn⁻¹ is deliberately NOT updated while
+        bypassed (that is the compute being saved); on re-close the stored
+        weights are invalidated so the stride logic cannot reuse them.
+
+        Requires the beamformer's use_snr_adaptive_blend (default on): with
+        it disabled the EMAs never update, estimated_snr_db() stays None,
+        and the gate simply never opens.
+        """
+        if not self.use_bypass_gate:
+            return False
+        est = self.beamformer.estimated_snr_db()
+        if est is not None:
+            if self._gate_open:
+                if est < self.gate_off_db:
+                    self._gate_open = False
+                    self._gate_transitions += 1
+                    self.beamformer.invalidate_weights()
+            elif est > self.gate_on_db:
+                self._gate_open = True
+                self._gate_transitions += 1
+        if self._gate_open:
+            self._gate_frames += 1
+            self.beamformer.update_snr_stats(X_frame, is_noise=not speech)
+        return self._gate_open
+
     # ── Full-recording batch processing ──────────────────────────────────────
 
     def process(self,
@@ -501,13 +576,30 @@ class AriaDenoisingPipeline:
         Y[:, :] = X[0, :, :]   # mic-0 passthrough until weights are valid
 
         doa_angles_deg = []
+        obs = self.observer
         for k in range(n_frames):
             Xk     = X[:, :, k]
             speech = (bool(annotated_vad[k]) if annotated_vad is not None
                       else self.vad.is_speech(Xk))
 
             ga_k          = ga[k] if ga is not None else None
+
+            # ── v8.0: SNR bypass gate ──────────────────────────────────────
+            # Y[:, k] already holds the mic-0 passthrough from the init
+            # above, so a bypassed frame needs no write at all.
+            if self._gate_check(Xk, speech):
+                doa_angles_deg.append(np.rad2deg(self._last_theta))
+                if obs is not None:
+                    obs(k, {'speech': speech, 'gated': True,
+                            'theta': self._last_theta, 'phi': self._last_phi,
+                            'd': None, 'w': None, 'mask': None,
+                            'weights_valid': False,
+                            't_doa_us': 0.0, 't_bf_us': 0.0})
+                continue
+
+            t0 = time.perf_counter() if obs is not None else 0.0
             d, theta, phi = self._get_steering(Xk, ga_k, is_vec, speech)
+            t1 = time.perf_counter() if obs is not None else 0.0
             doa_angles_deg.append(np.rad2deg(theta))
 
             if self.verbose and k % 100 == 0:
@@ -521,12 +613,22 @@ class AriaDenoisingPipeline:
                       f"speech={'yes' if speech else ' no '}  "
                       f"DOA={np.rad2deg(theta):+6.1f}°{phi_str}{gevd_diag}")
 
+            t2 = time.perf_counter() if obs is not None else 0.0
             bf_out = self.beamformer.process_frame(
                 Xk, d, is_noise=not speech, doa_reliable=doa_reliable,
                 theta=theta, phi=phi)
 
             if self.beamformer._weights_valid or not (not speech):
                 Y[:, k] = bf_out
+
+            if obs is not None:
+                bf = self.beamformer
+                obs(k, {'speech': speech, 'gated': False,
+                        'theta': theta, 'phi': phi,
+                        'd': d, 'w': bf._weights, 'mask': bf._last_mask,
+                        'weights_valid': bf._weights_valid,
+                        't_doa_us': (t1 - t0) * 1e6,
+                        't_bf_us': (time.perf_counter() - t2) * 1e6})
 
         angles          = np.array(doa_angles_deg)
         n_speech_frames = self.beamformer._frames_speech
@@ -618,6 +720,20 @@ class AriaDenoisingPipeline:
         speech = (speech_override if speech_override is not None
                   else self.vad.is_speech(X_frame))
 
+        obs = self.observer
+        k_idx = self._stream_frame_idx
+        self._stream_frame_idx = k_idx + 1
+
+        # ── v8.0: SNR bypass gate (mirrors the process() loop) ────────────
+        if self._gate_check(X_frame, speech):
+            if obs is not None:
+                obs(k_idx, {'speech': speech, 'gated': True,
+                            'theta': self._last_theta, 'phi': self._last_phi,
+                            'd': None, 'w': None, 'mask': None,
+                            'weights_valid': False,
+                            't_doa_us': 0.0, 't_bf_us': 0.0})
+            return X_frame[0].astype(np.complex64, copy=True)
+
         if self.use_gaze:
             if gaze is None:
                 raise ValueError("use_gaze=True: gaze argument required.")
@@ -632,10 +748,21 @@ class AriaDenoisingPipeline:
         else:
             ga_k, is_vec = None, False
 
+        t0 = time.perf_counter() if obs is not None else 0.0
         d, theta, phi = self._get_steering(X_frame, ga_k, is_vec, speech)
-        return self.beamformer.process_frame(
+        t1 = time.perf_counter() if obs is not None else 0.0
+        y = self.beamformer.process_frame(
             X_frame, d, is_noise=not speech,
             doa_reliable=self._doa_reliable, theta=theta, phi=phi)
+        if obs is not None:
+            bf = self.beamformer
+            obs(k_idx, {'speech': speech, 'gated': False,
+                        'theta': theta, 'phi': phi,
+                        'd': d, 'w': bf._weights, 'mask': bf._last_mask,
+                        'weights_valid': bf._weights_valid,
+                        't_doa_us': (t1 - t0) * 1e6,
+                        't_bf_us': (time.perf_counter() - t1) * 1e6})
+        return y
 
     # ── Reset ─────────────────────────────────────────────────────────────────
 
@@ -671,3 +798,9 @@ class AriaDenoisingPipeline:
 
         self._last_theta = 0.0
         self._last_phi   = 0.0
+
+        # -- v8.0 (runtime_demo): gate + observer per-clip state ------------
+        self._gate_open        = False
+        self._gate_frames      = 0
+        self._gate_transitions = 0
+        self._stream_frame_idx = 0

@@ -487,7 +487,8 @@ class MVDRBeamformer:
                  snr_blend_high_db:  float = SNR_BLEND_HIGH_DB,
                  snr_blend_wet_floor: float = SNR_BLEND_WET_FLOOR,
                  mic_selector: 'AdaptiveMicSelector | None' = None,
-                 doa_jump_freq_hz: float = DOA_JUMP_CHECK_FREQ_HZ):
+                 doa_jump_freq_hz: float = DOA_JUMP_CHECK_FREQ_HZ,
+                 weight_stride: int = 1):
         self.N             = N
         self.n_bins        = n_fft // 2 + 1
         self.alpha         = alpha
@@ -567,6 +568,21 @@ class MVDRBeamformer:
 
         # ── v7.1: adaptive mic selection (optional) ─────────────────────────
         self.mic_selector = mic_selector
+
+        # ── v8.0 (runtime_demo): weight-update stride ───────────────────────
+        # Recompute the MVDR weights only every `weight_stride`-th speech
+        # frame, reusing the previous weight vector in between. stride=1 is
+        # bit-identical to pre-v8 behaviour (recompute every speech frame).
+        # A recompute is always forced when weights are invalid (start of
+        # clip, DOA-jump decay, external invalidate_weights()), regardless
+        # of the stride phase. Skipped frames also skip compute_weights()'s
+        # side effects (trace guards, v6.1 distortion repair) — that is part
+        # of the accuracy cost this knob exists to measure. The mic mask is
+        # only re-resolved on recompute frames for the same reason.
+        self.weight_stride = max(1, int(weight_stride))
+        self._weights_age  = 0
+        # v8.0: last mask actually applied in compute_weights (observer aid)
+        self._last_mask: np.ndarray | None = None
 
         # ── Diagnostics ───────────────────────────────────────────────────
         self._nan_resets      = 0
@@ -1242,6 +1258,39 @@ class MVDRBeamformer:
 
     # ── Convenience: process one frame end-to-end ─────────────────────────────
 
+    # ── v8.0 (runtime_demo): SNR-stat / gate support helpers ──────────────────
+
+    def update_snr_stats(self, X: np.ndarray, is_noise: bool) -> None:
+        """v7.0 noise/speech power EMA update, factored out of process_frame()
+        so the pipeline's SNR bypass gate can keep the estimate alive on
+        frames it short-circuits. Exactly the former inline block."""
+        frame_power = float(np.mean(np.abs(X) ** 2))
+        if is_noise:
+            self._noise_power_ema = ((1.0 - SNR_POWER_ALPHA) * frame_power
+                                      + SNR_POWER_ALPHA * self._noise_power_ema)
+            self._n_noise_pwr += 1
+        else:
+            self._speech_power_ema = ((1.0 - SNR_POWER_ALPHA) * frame_power
+                                       + SNR_POWER_ALPHA * self._speech_power_ema)
+            self._n_speech_pwr += 1
+
+    def estimated_snr_db(self) -> 'float | None':
+        """Causal input-SNR estimate from the v7.0 EMAs, or None until both
+        classes have seen SNR_BLEND_MIN_FRAMES frames (same trust rule as
+        the SNR-adaptive blend)."""
+        if (self._n_noise_pwr < SNR_BLEND_MIN_FRAMES
+                or self._n_speech_pwr < SNR_BLEND_MIN_FRAMES):
+            return None
+        return 10.0 * np.log10(
+            self._speech_power_ema / (self._noise_power_ema + 1e-12) + 1e-12)
+
+    def invalidate_weights(self) -> None:
+        """Force a weight recompute on the next speech frame (used by the
+        pipeline gate when it re-engages the beamformer after a bypass
+        stretch: the stored weights are stale by an unknown number of
+        frames, so the stride counter must not be allowed to reuse them)."""
+        self._weights_valid = False
+
     def process_frame(self,
                       X: np.ndarray,
                       d: np.ndarray,
@@ -1326,16 +1375,11 @@ class MVDRBeamformer:
         self._last_d = d
 
         # ── v7.0: track noise/speech frame power for SNR-adaptive blending ──
+        # (v8.0: body factored into update_snr_stats() so the pipeline's
+        # bypass gate can keep the EMAs alive on frames that never reach
+        # this method. Same operations, same order — bit-identical.)
         if self.use_snr_adaptive_blend:
-            frame_power = float(np.mean(np.abs(X) ** 2))
-            if is_noise:
-                self._noise_power_ema = ((1.0 - SNR_POWER_ALPHA) * frame_power
-                                          + SNR_POWER_ALPHA * self._noise_power_ema)
-                self._n_noise_pwr += 1
-            else:
-                self._speech_power_ema = ((1.0 - SNR_POWER_ALPHA) * frame_power
-                                           + SNR_POWER_ALPHA * self._speech_power_ema)
-                self._n_speech_pwr += 1
+            self.update_snr_stats(X, is_noise)
 
         # ── v7.1: feed adaptive mic selector, every frame (cheap) ───────────
         if self.mic_selector is not None:
@@ -1374,13 +1418,27 @@ class MVDRBeamformer:
         else:
             self._frames_speech += 1
 
-            # ── v7.1: resolve the mic mask for this speech frame ────────────
-            eff_mask = mic_mask
-            if eff_mask is None and self.mic_selector is not None and theta is not None:
-                self.mic_selector.update(theta, phi)
-                eff_mask = self.mic_selector.get_mask()
+            # ── v8.0: weight-update stride ──────────────────────────────────
+            # Recompute on: invalid weights (always), else every stride-th
+            # speech frame. At stride=1 the condition is always true, making
+            # the call pattern — and therefore the output — bit-identical to
+            # pre-v8 behaviour.
+            recompute = (not self._weights_valid
+                         or self._weights_age + 1 >= self.weight_stride)
 
-            self.compute_weights(d, mic_mask=eff_mask)
+            if recompute:
+                # ── v7.1: resolve the mic mask for this speech frame ────────
+                eff_mask = mic_mask
+                if eff_mask is None and self.mic_selector is not None and theta is not None:
+                    self.mic_selector.update(theta, phi)
+                    eff_mask = self.mic_selector.get_mask()
+
+                self.compute_weights(d, mic_mask=eff_mask)
+                self._weights_age = 0
+                self._last_mask   = eff_mask
+            else:
+                self._weights_age += 1
+                eff_mask = self._last_mask   # mask the weights were built with
             y = self.apply(X)
 
             # ── v5.2 / v6.2 : output-power monitor + DAS fallback ─────────
@@ -1553,6 +1611,8 @@ class MVDRBeamformer:
         self._weights_valid     = False
         self._noise_frame_count = 0   # restart warmup (v5.1)
         self._last_d            = None  # clear projection-guard state (v6.0)
+        self._weights_age       = 0     # v8.0: restart weight-stride phase
+        self._last_mask         = None
 
         # ── v7.0: clear noise-frame purity gate baseline (fresh per clip) ──
         self._mahal_mean             = 0.0
