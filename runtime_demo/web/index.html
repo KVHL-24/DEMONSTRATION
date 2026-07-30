@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gaze Beamforming — Runtime Demo</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --edge: #2d333b;
+    --text: #e6edf3; --dim: #8b949e;
+    --a: #4da3ff; --b: #ff9e4d;
+    --target: #3fb950; --interf: #f85149; --gate: #d29922;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, sans-serif;
+    display: flex; flex-direction: column; align-items: center;
+    min-height: 100vh; padding: 14px;
+  }
+  h1 { font-size: 17px; font-weight: 600; }
+  .sub { color: var(--dim); font-size: 12px; margin-bottom: 12px; }
+  .bar {
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    background: var(--panel); border: 1px solid var(--edge);
+    border-radius: 8px; padding: 8px 12px; margin-bottom: 10px;
+    justify-content: center;
+  }
+  select, button {
+    background: #21262d; color: var(--text); border: 1px solid var(--edge);
+    border-radius: 6px; padding: 5px 10px; font-size: 13px; cursor: pointer;
+  }
+  button:hover, select:hover { border-color: #58a6ff; }
+  button.primary { background: #1f6feb; border-color: #1f6feb; }
+  button.preset  { background: #21262d; border-color: #3d444d; font-size: 12px; }
+  .main { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center;
+          align-items: flex-start; }
+  .col { display: flex; flex-direction: column; gap: 10px; }
+  .cfg {
+    background: var(--panel); border: 1px solid var(--edge); border-radius: 10px;
+    padding: 10px 12px; width: 240px; font-size: 12.5px;
+  }
+  .cfg h3 { font-size: 13px; margin-bottom: 8px; display: flex; align-items: center; gap: 6px;}
+  .cfg .row { display: flex; justify-content: space-between; align-items: center;
+              margin: 5px 0; }
+  .cfg select { padding: 3px 6px; font-size: 12.5px; width: 110px; }
+  .dot { width: 10px; height: 10px; border-radius: 5px; display: inline-block; }
+  canvas.polar { background: var(--panel); border: 1px solid var(--edge);
+                 border-radius: 12px; }
+  .metric { margin-top: 8px; border-top: 1px solid var(--edge); padding-top: 8px; }
+  .metric .big { font-size: 20px; font-weight: 600; }
+  .metric .lbl { color: var(--dim); font-size: 11px; }
+  .meter { height: 8px; background: #21262d; border-radius: 4px; overflow: hidden;
+           margin: 3px 0 7px; }
+  .meter > div { height: 100%; border-radius: 4px; transition: width .18s; }
+  .stagebar { display: flex; height: 10px; border-radius: 4px; overflow: hidden;
+              background: #21262d; margin: 3px 0 7px; }
+  .stagebar > div { height: 100%; transition: width .18s; }
+  .gatechip { color: var(--gate); font-weight: 600; visibility: hidden; }
+  .gatechip.on { visibility: visible; }
+  .sw { width: 8px; height: 8px; display: inline-block; border-radius: 2px;
+        margin: 0 3px 0 8px; vertical-align: baseline; }
+  #spec { background: var(--panel); border: 1px solid var(--edge);
+          border-radius: 8px; margin-top: 12px; }
+  .listen { margin-top: 10px; display: flex; gap: 10px; align-items: center; }
+  #status { color: var(--dim); font-size: 12px; margin-top: 8px; }
+  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--dim);
+            margin-top: 8px; flex-wrap: wrap; justify-content: center; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; }
+</style>
+</head>
+<body>
+  <h1>Gaze-Steered Beamforming — Live A/B on Jetson Thor</h1>
+  <div class="sub">two pipelines, same audio, 1x real time · beam pattern |Σ w·d(θ)|², 0.8–3 kHz</div>
+
+  <div class="bar">
+    <button class="preset" id="p1">① eyes beat ears</button>
+    <button class="preset" id="p2">② cheap wins</button>
+    <button class="preset" id="p3">③ …but not always</button>
+    <span style="width:14px"></span>
+    <select id="clipSel" title="clip"></select>
+    <button id="btnPlay" class="primary">▶ Play</button>
+    <button id="btnPause">‖</button>
+    <button id="btnRestart">⟲</button>
+    <span id="clock" style="color:var(--dim); min-width:64px"></span>
+    <button id="btnSweep" style="border-color:var(--gate)">⚡ SWEEP</button>
+    <span id="sweepStat" style="color:var(--dim); font-size:12px"></span>
+  </div>
+
+  <div class="main">
+    <div class="col">
+      <div class="cfg" id="cfgA">
+        <h3><span class="dot" style="background:var(--a)"></span>Config A
+            <span class="gatechip" id="gateA">GATED</span></h3>
+        <div class="row"><span>steering</span><select data-side="A" data-k="steering">
+          <option value="gaze">gaze</option><option value="srp">SRP (acoustic)</option></select></div>
+        <div class="row"><span>microphones</span><select data-side="A" data-k="n_mics">
+          <option>6</option><option>5</option><option>4</option><option>3</option><option>2</option></select></div>
+        <div class="row"><span>weight stride</span><select data-side="A" data-k="weight_stride">
+          <option>1</option><option>2</option><option>4</option></select></div>
+        <div class="row"><span>bypass gate</span><select data-side="A" data-k="gate">
+          <option value="false">off</option><option value="true">on</option></select></div>
+        <div class="metric">
+          <div class="lbl">compute duty (stages 2–3): <b id="dutytxtA">—</b>
+               <span title="compute time per second of audio, at 1x playback">ⓘ</span></div>
+          <div class="meter"><div id="dutyA" style="background:var(--a)"></div></div>
+          <div class="lbl">stage split:
+               <span class="sw" style="background:#79c0ff"></span>DOA <b id="sdoatxtA">—</b>
+               <span class="sw" style="background:#1f6feb"></span>beamform <b id="sbftxtA">—</b></div>
+          <div class="stagebar"><div id="sdoaA" style="background:#79c0ff"></div>
+                                <div id="sbfA"  style="background:#1f6feb"></div></div>
+          <span class="big" id="sisdrA">—</span> <span class="lbl">dB SI-SDR (clip so far)</span>
+          <div class="lbl" id="deltaA"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col">
+      <canvas id="polar" class="polar" width="560" height="560"></canvas>
+      <div id="verdict" style="text-align:center; font-size:14px; font-weight:600;
+           padding:6px; border-radius:8px; background:var(--panel);
+           border:1px solid var(--edge); color:var(--dim)">—</div>
+      <div class="legend">
+        <span class="chip"><span class="dot" style="background:var(--a)"></span>A <span id="shortA"></span></span>
+        <span class="chip"><span class="dot" style="background:var(--b)"></span>B <span id="shortB"></span></span>
+        <span class="chip"><span class="dot" style="background:var(--target)"></span>target</span>
+        <span class="chip"><span class="dot" style="background:var(--interf)"></span>interferer</span>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="cfg" id="cfgB">
+        <h3><span class="dot" style="background:var(--b)"></span>Config B
+            <span class="gatechip" id="gateB">GATED</span></h3>
+        <div class="row"><span>steering</span><select data-side="B" data-k="steering">
+          <option value="gaze">gaze</option><option value="srp">SRP (acoustic)</option></select></div>
+        <div class="row"><span>microphones</span><select data-side="B" data-k="n_mics">
+          <option>6</option><option>5</option><option>4</option><option>3</option><option>2</option></select></div>
+        <div class="row"><span>weight stride</span><select data-side="B" data-k="weight_stride">
+          <option>1</option><option>2</option><option>4</option></select></div>
+        <div class="row"><span>bypass gate</span><select data-side="B" data-k="gate">
+          <option value="false">off</option><option value="true">on</option></select></div>
+        <div class="metric">
+          <div class="lbl">compute duty (stages 2–3): <b id="dutytxtB">—</b>
+               <span title="compute time per second of audio, at 1x playback">ⓘ</span></div>
+          <div class="meter"><div id="dutyB" style="background:var(--b)"></div></div>
+          <div class="lbl">stage split:
+               <span class="sw" style="background:#ffc680"></span>DOA <b id="sdoatxtB">—</b>
+               <span class="sw" style="background:#d4770a"></span>beamform <b id="sbftxtB">—</b></div>
+          <div class="stagebar"><div id="sdoaB" style="background:#ffc680"></div>
+                                <div id="sbfB"  style="background:#d4770a"></div></div>
+          <span class="big" id="sisdrB">—</span> <span class="lbl">dB SI-SDR (clip so far)</span>
+          <div class="lbl" id="deltaB"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="lbl" style="color:var(--dim); font-size:11px; margin-top:12px; width:880px; max-width:95vw;
+       display:flex; justify-content:space-between">
+    <span><b>input spectrogram</b> — raw mic 0 (what both configs hear), scrolling left</span>
+    <span>y: freq 0→24 kHz (log) · color: energy · bright combs = speech harmonics</span>
+  </div>
+  <canvas id="spec" width="880" height="90" style="margin-top:2px"
+          title="input spectrogram (mic 0)"></canvas>
+
+  <div id="paretoBox" style="display:none; margin-top:12px; width:880px; max-width:95vw">
+    <div class="lbl" style="color:var(--dim); font-size:12px; display:flex;
+         justify-content:space-between; margin-bottom:4px">
+      <span><b>SWEEP — accuracy vs energy</b>, 9 configs on <span id="paretoClip"></span></span>
+      <span>
+        <span class="sw" style="background:var(--a); border-radius:5px"></span>gaze
+        <span class="sw" style="background:var(--b); transform:rotate(45deg)"></span>SRP
+        &nbsp;—&nbsp; Pareto frontier
+      </span>
+    </div>
+    <div style="position:relative">
+      <canvas id="pareto" style="background:var(--panel); border:1px solid var(--edge);
+        border-radius:8px; width:100%"></canvas>
+      <div id="paretoTip" style="position:absolute; display:none; pointer-events:none;
+        background:#21262d; border:1px solid #3d444d; border-radius:6px; padding:6px 9px;
+        font-size:12px; color:var(--text); white-space:nowrap; z-index:5"></div>
+    </div>
+  </div>
+
+  <div class="listen">
+    🎧
+    <button data-au="in" title="raw mic 0, unprocessed — the 'before'">input (raw mic)</button>
+    <button data-au="A" style="border-color:var(--a)"
+            title="config A's processed output">A output</button>
+    <button data-au="B" style="border-color:var(--b)"
+            title="config B's processed output">B output</button>
+    <audio id="player" controls style="height:28px"></audio>
+    <span class="lbl" style="color:var(--dim); font-size:11px">
+      plays what has been processed so far, in this browser</span>
+  </div>
+
+  <div id="status">connecting…</div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const N_AZ = 72, FLOOR_DB = -30;
+let state = null, last = null;
+
+const PRESETS = {
+  p1: { clip: "babble_taz-007_iaz-025_snr-10_rep00",       // sep 17°, −10 dB
+        A: {steering:"gaze", n_mics:6, weight_stride:1, gate:false},
+        B: {steering:"srp",  n_mics:6, weight_stride:1, gate:false} },
+  p2: { clip: "white_noise_taz-008_iaz+000_snr+10_rep00",  // easy, +10 dB
+        A: {steering:"gaze", n_mics:6, weight_stride:1, gate:false},
+        B: {steering:"gaze", n_mics:3, weight_stride:4, gate:true} },
+  // Same cheap B as ②, but on the small-separation clip: nulling a 17°-away
+  // interferer needs the full aperture — the cheap config lands BELOW raw
+  // mic (measured −0.42 dB vs full's +0.53). This, not the dynamic clip,
+  // is where cheap breaks; on cocktail_dynamic −15 the cheap config
+  // actually WON (+0.76) — see sweep_cache.
+  p3: { clip: "babble_taz-007_iaz-025_snr-10_rep00",
+        A: {steering:"gaze", n_mics:6, weight_stride:1, gate:false},
+        B: {steering:"gaze", n_mics:3, weight_stride:4, gate:true} },
+};
+
+async function post(body) {
+  const r = await fetch("/control", {method: "POST", body: JSON.stringify(body)});
+  return r.json();
+}
+async function applyPreset(p) {
+  await post({action: "pause"});
+  await post({action: "load", clip: p.clip});
+  await post({action: "config", side: "A", cfg: p.A});
+  await post({action: "config", side: "B", cfg: p.B});
+  await post({action: "play"});
+}
+for (const k of ["p1", "p2", "p3"])
+  $(k).onclick = () => applyPreset(PRESETS[k]);
+
+$("btnPlay").onclick    = () => post({action: "play"});
+$("btnPause").onclick   = () => post({action: "pause"});
+$("btnRestart").onclick = () => post({action: "restart"});
+$("clipSel").onchange   = e => post({action: "load", clip: e.target.value});
+
+document.querySelectorAll(".cfg select").forEach(sel => {
+  sel.onchange = () => {
+    const side = sel.dataset.side;
+    const cfg = {};
+    document.querySelectorAll(`.cfg select[data-side="${side}"]`).forEach(s => {
+      const k = s.dataset.k;
+      cfg[k] = k === "steering" ? s.value
+             : k === "gate"     ? s.value === "true"
+             : parseInt(s.value, 10);
+    });
+    post({action: "config", side, cfg}).then(() => post({action: "play"}));
+  };
+});
+
+function syncSelects() {
+  if (!state || !state.configs) return;
+  for (const side of ["A", "B"]) {
+    const cfg = state.configs[side];
+    document.querySelectorAll(`.cfg select[data-side="${side}"]`).forEach(s => {
+      const k = s.dataset.k;
+      const v = k === "gate" ? String(cfg[k]) : String(cfg[k]);
+      if (s.value !== v) s.value = v;
+    });
+  }
+}
+
+// ── listen ─────────────────────────────────────────────────────────────────
+document.querySelectorAll(".listen button").forEach(btn => {
+  btn.onclick = async () => {
+    const r = await fetch(`/audio/${btn.dataset.au}.wav`);
+    if (!r.ok) return;
+    const blob = await r.blob();
+    const player = $("player");
+    player.src = URL.createObjectURL(blob);
+    player.play();
+  };
+});
+
+// ── clip list ──────────────────────────────────────────────────────────────
+fetch("/clips").then(r => r.json()).then(clips => {
+  const sel = $("clipSel");
+  clips.forEach(c => {
+    const o = document.createElement("option");
+    o.value = c.name;
+    o.textContent = `${c.scenario} ${c.snr_db > 0 ? "+" : ""}${c.snr_db}dB sep${c.sep_deg}°`;
+    sel.appendChild(o);
+  });
+  if (!state || !state.clip) applyPreset(PRESETS.p1);
+});
+
+// ── SSE ────────────────────────────────────────────────────────────────────
+const es = new EventSource("/stream");
+es.onmessage = ev => {
+  const m = JSON.parse(ev.data);
+  if (m.type === "status") {
+    state = m;
+    if (m.clip) { const s = $("clipSel"); if (s.value !== m.clip.name) s.value = m.clip.name; }
+    $("shortA").textContent = m.shorts ? m.shorts.A : "";
+    $("shortB").textContent = m.shorts ? m.shorts.B : "";
+    $("status").textContent = (m.playing ? "playing " : "paused ") +
+      (m.clip ? `· ${m.clip.scenario} ${m.clip.snr_db} dB · sep ${Math.round(m.clip.sep_deg)}°` : "");
+    syncSelects();
+  } else if (m.type === "telemetry") {
+    last = m;
+    $("clock").textContent = m.t.toFixed(1) + " s";
+    for (const s of ["A", "B"]) {
+      const d = m.sides[s];
+      $("duty" + s).style.width = Math.min(100, d.duty * 100) + "%";
+      $("dutytxt" + s).textContent = (d.duty * 100).toFixed(1) + "%";
+      const tot = d.stage_us.doa + d.stage_us.bf;
+      $("sdoa" + s).style.width = tot ? (d.stage_us.doa / tot * 100) + "%" : "0";
+      $("sbf" + s).style.width  = tot ? (d.stage_us.bf  / tot * 100) + "%" : "0";
+      $("sdoatxt" + s).textContent = tot ? Math.round(d.stage_us.doa) + "µs" : "—";
+      $("sbftxt" + s).textContent  = tot ? Math.round(d.stage_us.bf) + "µs" : "—";
+      $("sisdr" + s).textContent = d.si_sdr_cum === null ? "—" : d.si_sdr_cum.toFixed(1);
+      $("delta" + s).textContent =
+        (d.si_sdr_cum_delta === null ? "" :
+          `${d.si_sdr_cum_delta >= 0 ? "+" : ""}${d.si_sdr_cum_delta.toFixed(2)} dB vs raw mic`) +
+        (d.si_sdr === null ? "" : ` · window ${d.si_sdr.toFixed(1)}`) +
+        (d.gate_frac ? ` · gated ${(d.gate_frac * 100).toFixed(0)}%` : "");
+      $("gate" + s).classList.toggle("on", d.gated);
+    }
+    updateVerdict(m);
+    drawSpecColumn(m.shared.in_spec);
+  } else if (m.type === "sweep_progress") {
+    $("sweepStat").textContent = `sweep ${m.i + 1}/${m.n}: ${m.label}`;
+  } else if (m.type === "sweep_result") {
+    $("sweepStat").textContent = m.cached ? "sweep (cached)" : "sweep done";
+    drawPareto(m);
+  } else if (m.type === "sweep_error") {
+    $("sweepStat").textContent = "sweep failed: " + m.reason;
+  }
+};
+$("btnSweep").onclick = () => {
+  $("sweepStat").textContent = "sweep starting…";
+  post({action: "sweep"});
+};
+es.onerror = () => { $("status").textContent = "stream lost — reconnecting…"; };
+
+// ── A/B verdict badge ──────────────────────────────────────────────────────
+function updateVerdict(m) {
+  const a = m.sides.A.si_sdr_cum, b = m.sides.B.si_sdr_cum;
+  const v = $("verdict");
+  if (a === null || b === null) {
+    v.textContent = "accuracy verdict: warming up…";
+    v.style.color = getCSS("--dim"); return;
+  }
+  const diff = a - b;
+  if (Math.abs(diff) < 0.15) {
+    v.textContent = `A ≈ B  (Δ ${diff >= 0 ? "+" : ""}${diff.toFixed(2)} dB — a tie)`;
+    v.style.color = getCSS("--dim");
+  } else if (diff > 0) {
+    v.textContent = `A leads by ${diff.toFixed(2)} dB (clip so far)`;
+    v.style.color = getCSS("--a");
+  } else {
+    v.textContent = `B leads by ${(-diff).toFixed(2)} dB (clip so far)`;
+    v.style.color = getCSS("--b");
+  }
+}
+
+// ── polar drawing ──────────────────────────────────────────────────────────
+const cv = $("polar"), ctx = cv.getContext("2d");
+function polarXY(azDeg, r01, R, cx, cy) {
+  const a = (azDeg - 90) * Math.PI / 180;
+  return [cx + R * r01 * Math.cos(a), cy + R * r01 * Math.sin(a)];
+}
+function drawPattern(beam, color, cx, cy, R) {
+  if (!beam) return;
+  ctx.beginPath();
+  for (let i = 0; i <= N_AZ; i++) {
+    const j = i % N_AZ, az = -180 + j * 360 / N_AZ;
+    const r = Math.max(0, 1 - beam[j] / FLOOR_DB);
+    const [x, y] = polarXY(az, r, R, cx, cy);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.strokeStyle = color; ctx.lineWidth = 2.2; ctx.stroke();
+  ctx.globalAlpha = 0.12; ctx.fillStyle = color; ctx.fill();
+  ctx.globalAlpha = 1;
+}
+function drawRay(azDeg, color, cx, cy, R, dash) {
+  if (azDeg === null || azDeg === undefined) return;
+  const [x, y] = polarXY(azDeg, 1.0, R, cx, cy);
+  ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(x, y);
+  ctx.strokeStyle = color; ctx.lineWidth = 1.6;
+  ctx.setLineDash(dash || []); ctx.stroke(); ctx.setLineDash([]);
+}
+const cssCache = {};
+function getCSS(v) {
+  if (!cssCache[v])
+    cssCache[v] = getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  return cssCache[v];
+}
+function draw() {
+  const W = cv.width, H = cv.height, cx = W / 2, cy = H / 2, R = W * 0.42;
+  ctx.clearRect(0, 0, W, H);
+  ctx.strokeStyle = "#242b33"; ctx.fillStyle = "#4b5563"; ctx.font = "10px system-ui";
+  for (const db of [0, -10, -20]) {
+    const r = 1 - db / FLOOR_DB;
+    ctx.beginPath(); ctx.arc(cx, cy, R * r, 0, 7); ctx.stroke();
+    ctx.fillText(db + " dB", cx + 4, cy - R * r + 12);
+  }
+  for (let az = 0; az < 360; az += 30) {
+    const [x, y] = polarXY(az, 1, R, cx, cy);
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(x, y);
+    ctx.strokeStyle = "#1b2129"; ctx.stroke();
+    const [lx, ly] = polarXY(az, 1.09, R, cx, cy);
+    ctx.fillText((az <= 180 ? az : az - 360) + "°", lx - 8, ly + 3);
+  }
+  if (state && state.clip) {
+    drawRay(state.clip.target_az, getCSS("--target"), cx, cy, R, [6, 4]);
+    drawRay(state.clip.interf_az, getCSS("--interf"), cx, cy, R, [6, 4]);
+  }
+  if (last) {
+    drawPattern(last.sides.A.beam, getCSS("--a"), cx, cy, R);
+    drawPattern(last.sides.B.beam, getCSS("--b"), cx, cy, R);
+    drawRay(last.sides.A.theta_deg, getCSS("--a"), cx, cy, R, [2, 4]);
+    drawRay(last.sides.B.theta_deg, getCSS("--b"), cx, cy, R, [2, 4]);
+  }
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+// ── scrolling input spectrogram ─────────────────────────────────────────────
+const sc = $("spec"), sctx = sc.getContext("2d");
+sctx.fillStyle = "#161b22"; sctx.fillRect(0, 0, sc.width, sc.height);
+function drawSpecColumn(col) {
+  if (!col) return;
+  // shift left by 1px
+  sctx.drawImage(sc, 1, 0, sc.width - 1, sc.height, 0, 0, sc.width - 1, sc.height);
+  const n = col.length, x = sc.width - 1;
+  for (let i = 0; i < n; i++) {
+    const v = Math.max(0, Math.min(1, (col[i] + 70) / 70));   // −70..0 dB
+    const y = sc.height - Math.round((i + 1) / n * sc.height);
+    const h = Math.ceil(sc.height / n);
+    sctx.fillStyle = specColor(v);
+    sctx.fillRect(x, y, 1, h);
+  }
+}
+// ── Pareto plot ─────────────────────────────────────────────────────────────
+let paretoState = null;      // {res, pts:[{x,y,px,py,r}], useEnergy} for hover
+
+function niceTicks(min, max, n) {
+  const span = max - min, step0 = span / n;
+  const mag = Math.pow(10, Math.floor(Math.log10(step0)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag)
+                                 .find(s => span / s <= n) || 10 * mag;
+  const t = [];
+  for (let v = Math.ceil(min / step) * step; v <= max + 1e-9; v += step)
+    t.push(Math.round(v * 1000) / 1000);
+  return t;
+}
+
+function drawPareto(res) {
+  $("paretoBox").style.display = "block";
+  $("paretoClip").textContent = res.clip + ` (${Math.round(res.seconds)} s window)`;
+  const pv = $("pareto"), c = pv.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  const Wc = pv.clientWidth || 880, Hc = 320;
+  pv.width = Wc * dpr; pv.height = Hc * dpr;
+  pv.style.height = Hc + "px";
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const W = Wc, H = Hc, ml = 56, mr = 20, mt = 16, mb = 44;
+  c.clearRect(0, 0, W, H);
+
+  const useEnergy = res.power_available &&
+                    res.results.every(r => r.mj_per_s !== null);
+  const xs = res.results.map(r => useEnergy ? r.mj_per_s : r.rtf * 1000);
+  const ys = res.results.map(r => r.delta_db);
+  const xmax = Math.max(...xs) * 1.1;
+  const ymin = Math.min(0, ...ys) - 0.3, ymax = Math.max(0.4, ...ys) + 0.3;
+  const X = x => ml + (x / xmax) * (W - ml - mr);
+  const Y = y => mt + (1 - (y - ymin) / (ymax - ymin)) * (H - mt - mb);
+
+  // hairline grid + clean ticks, recessive
+  c.font = "11px system-ui"; c.lineWidth = 1;
+  c.strokeStyle = "#20262e"; c.fillStyle = "#6e7681";
+  for (const tx of niceTicks(0, xmax, 7)) {
+    c.beginPath(); c.moveTo(X(tx), mt); c.lineTo(X(tx), H - mb); c.stroke();
+    c.textAlign = "center"; c.fillText(tx, X(tx), H - mb + 15);
+  }
+  for (const ty of niceTicks(ymin, ymax, 5)) {
+    c.beginPath(); c.moveTo(ml, Y(ty)); c.lineTo(W - mr, Y(ty)); c.stroke();
+    c.textAlign = "right"; c.fillText(ty.toFixed(1), ml - 7, Y(ty) + 4);
+  }
+  // zero = raw-mic reference, one step brighter, labeled
+  c.strokeStyle = "#3d444d";
+  c.beginPath(); c.moveTo(ml, Y(0)); c.lineTo(W - mr, Y(0)); c.stroke();
+  c.textAlign = "left"; c.fillStyle = "#8b949e";
+  c.fillText("raw mic (no processing)", ml + 6, Y(0) - 5);
+  // axis titles in muted ink
+  c.textAlign = "center";
+  c.fillText(useEnergy
+      ? "energy — mJ per second of audio (CPU_SOC rail above idle; lower = better)"
+      : "compute — ms per second of audio (lower = better)",
+      ml + (W - ml - mr) / 2, H - 8);
+  c.save(); c.translate(13, mt + (H - mt - mb) / 2); c.rotate(-Math.PI / 2);
+  c.fillText("ΔSI-SDR vs raw mic, dB (higher = better)", 0, 0); c.restore();
+
+  // Pareto frontier: non-dominated set (max Δ, min energy), thin line
+  const idx = xs.map((_, i) => i).sort((a, b) => xs[a] - xs[b]);
+  const frontier = [];
+  let best = -Infinity;
+  for (const i of idx) if (ys[i] > best) { frontier.push(i); best = ys[i]; }
+  c.strokeStyle = "#8b949e"; c.lineWidth = 1.5; c.setLineDash([5, 4]);
+  c.beginPath();
+  frontier.forEach((i, k) => {
+    const px = X(xs[i]), py = Y(ys[i]);
+    k === 0 ? c.moveTo(px, py) : c.lineTo(px, py);
+  });
+  c.stroke(); c.setLineDash([]);
+
+  // marks: circle = gaze, diamond = SRP (shape backs up color), surface ring
+  const surface = "#161b22", pts = [];
+  res.results.forEach((r, i) => {
+    const px = X(xs[i]), py = Y(ys[i]);
+    const isGaze = r.cfg.steering === "gaze";
+    c.beginPath();
+    if (isGaze) c.arc(px, py, 6, 0, 7);
+    else { c.moveTo(px, py - 7); c.lineTo(px + 7, py); c.lineTo(px, py + 7);
+           c.lineTo(px - 7, py); c.closePath(); }
+    c.fillStyle = isGaze ? getCSS("--a") : getCSS("--b");
+    c.strokeStyle = surface; c.lineWidth = 2;
+    c.fill(); c.stroke();
+    pts.push({px, py, i});
+  });
+
+  // selective labels: frontier points only, muted ink, side-aware placement
+  c.fillStyle = "#c9d1d9"; c.font = "11px system-ui";
+  for (const i of frontier) {
+    const px = X(xs[i]), py = Y(ys[i]);
+    const left = px > W - 150;
+    c.textAlign = left ? "right" : "left";
+    c.fillText(res.results[i].short, px + (left ? -11 : 11), py + 4);
+  }
+  paretoState = {res, pts, xs, ys, useEnergy};
+}
+
+// hover tooltip: nearest point within 18 px
+$("pareto").addEventListener("mousemove", ev => {
+  if (!paretoState) return;
+  const rect = $("pareto").getBoundingClientRect();
+  const mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
+  let hit = null, dmin = 18;
+  for (const p of paretoState.pts) {
+    const d = Math.hypot(p.px - mx, p.py - my);
+    if (d < dmin) { dmin = d; hit = p; }
+  }
+  const tip = $("paretoTip");
+  if (!hit) { tip.style.display = "none"; return; }
+  const r = paretoState.res.results[hit.i];
+  tip.innerHTML =
+    `<b>${r.short}</b><br>` +
+    `ΔSI-SDR: ${r.delta_db >= 0 ? "+" : ""}${r.delta_db} dB<br>` +
+    (r.mj_per_s !== null ? `energy: ${r.mj_per_s} mJ/s<br>` : "") +
+    `speedup: ${r.speedup}x · RTF ${r.rtf}` +
+    (r.gate_frac ? `<br>gated: ${(r.gate_frac * 100).toFixed(0)}%` : "");
+  tip.style.left = Math.min(hit.px + 14, $("pareto").clientWidth - 180) + "px";
+  tip.style.top = (hit.py - 10) + "px";
+  tip.style.display = "block";
+});
+$("pareto").addEventListener("mouseleave", () => {
+  $("paretoTip").style.display = "none";
+});
+
+function specColor(v) {
+  // dark → blue → orange → white
+  const r = Math.round(255 * Math.min(1, Math.max(0, v * 2 - 0.6)));
+  const g = Math.round(255 * Math.min(1, Math.max(0, v * 1.6 - 0.4)));
+  const b = Math.round(60 + 195 * Math.min(1, v * 1.4));
+  return `rgb(${r},${g},${Math.round(b * (0.4 + 0.6 * v))})`;
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,55 @@
+{
+  "label": "runtime_demo_phase0_v2",
+  "cmd": [],
+  "hz": 20.0,
+  "vin_label": "VIN",
+  "rails": [
+    "VDD_GPU",
+    "VDD_CPU_SOC_MSS",
+    "VIN_SYS_5V0"
+  ],
+  "env": {
+    "model": "NVIDIA Jetson AGX Thor Developer Kit\u0000",
+    "l4t": "# R39 (release), REVISION: 2.0, GCID: 45755727, BOARD: generic, EABI: aarch64, DATE: Mon Jun  1 09:28:48 PM UTC 2026",
+    "nvpmodel": "NV Power Mode: 120W / 1",
+    "ina3221_samples": "512",
+    "freq_limits": {
+      "8188050000.vic": {
+        "max": "1107000000",
+        "hw_ceiling": "1107000000"
+      },
+      "bwmgr": {
+        "max": "4266000000",
+        "hw_ceiling": "4266000000"
+      },
+      "gpu-gpc-0": {
+        "max": "1386000000",
+        "hw_ceiling": "1575000000"
+      },
+      "gpu-nvd-0": {
+        "max": "1557000000",
+        "hw_ceiling": "1692000000"
+      },
+      "cpu0": {
+        "max": "2601000",
+        "hw_ceiling": "2601000"
+      }
+    },
+    "ncpu": 14
+  },
+  "marks": {
+    "cmd_start": null,
+    "cmd_end": null,
+    "returncode": null,
+    "total": 572.6575147909971,
+    "n_samples": 11454,
+    "interrupted": false,
+    "post_converged": null,
+    "pre_tj_c": null,
+    "post_tj_c": 43.0,
+    "launch_error": null,
+    "run_samples": 0,
+    "read_errors": 0,
+    "ctx_errors": 0
+  }
+}

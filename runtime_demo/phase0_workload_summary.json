@@ -1,0 +1,74 @@
+[
+  {
+    "chunks": 6,
+    "busy_s": 2.424,
+    "audio_s": 30.0,
+    "wall_s": 30.0,
+    "duty": 0.0808,
+    "label": "n6_1x_rep0"
+  },
+  {
+    "chunks": 6,
+    "busy_s": 1.238,
+    "audio_s": 30.0,
+    "wall_s": 30.0,
+    "duty": 0.0413,
+    "label": "n2_1x_rep0"
+  },
+  {
+    "chunks": 75,
+    "busy_s": 30.065,
+    "audio_s": 375.0,
+    "wall_s": 30.163,
+    "duty": 0.9967,
+    "label": "n6_flat_rep0"
+  },
+  {
+    "chunks": 6,
+    "busy_s": 2.448,
+    "audio_s": 30.0,
+    "wall_s": 30.0,
+    "duty": 0.0816,
+    "label": "n6_1x_rep1"
+  },
+  {
+    "chunks": 6,
+    "busy_s": 1.237,
+    "audio_s": 30.0,
+    "wall_s": 30.0,
+    "duty": 0.0412,
+    "label": "n2_1x_rep1"
+  },
+  {
+    "chunks": 75,
+    "busy_s": 30.105,
+    "audio_s": 375.0,
+    "wall_s": 30.202,
+    "duty": 0.9968,
+    "label": "n6_flat_rep1"
+  },
+  {
+    "chunks": 6,
+    "busy_s": 2.531,
+    "audio_s": 30.0,
+    "wall_s": 30.0,
+    "duty": 0.0844,
+    "label": "n6_1x_rep2"
+  },
+  {
+    "chunks": 6,
+    "busy_s": 1.254,
+    "audio_s": 30.0,
+    "wall_s": 30.0,
+    "duty": 0.0418,
+    "label": "n2_1x_rep2"
+  },
+  {
+    "chunks": 74,
+    "busy_s": 29.935,
+    "audio_s": 370.0,
+    "wall_s": 30.031,
+    "duty": 0.9968,
+    "label": "n6_flat_rep2"
+  }
+]
