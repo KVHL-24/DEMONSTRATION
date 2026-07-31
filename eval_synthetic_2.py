@@ -988,7 +988,7 @@ def print_ablation_report(all_results, ablated_base_modes, snrs):
 def parse_args(argv=None):
     p = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    p.add_argument('--dataset', required=True,
+    p.add_argument('--dataset', default="/esat/betelgeuse1/users/kvanhall/Demonstration/new_dataset",
                    help='Synthetic dataset root directory')
     p.add_argument('--atf',
                    default=None,

@@ -2,9 +2,12 @@
 
 Two claims are enforced, mirroring the bench_optimizations.py house rule:
 
-1. **Bit-identical**: with every new knob at its default (weight stride 1,
-   bypass gate off, observer None) the pipeline output must equal the
-   pre-change output SAMPLE FOR SAMPLE (max |Δ| == 0.0).
+1. **Bit-identical**: with every knob at its default (observer None) the
+   pipeline output must equal the captured baseline SAMPLE FOR SAMPLE
+   (max |Δ| == 0.0). NOTE (chao-v2): the algorithm was intentionally
+   re-aligned to main (REG, direction-aware VAD, mic selection), so
+   baselines captured before that change WILL fail — re-run --capture
+   once on the aligned code to establish new baselines.
 2. **Observer overhead < 3%**: attaching a recording observer must not
    slow the pipeline by more than 3%.
 

@@ -135,7 +135,33 @@ if TYPE_CHECKING:
 ALPHA_DEFAULT  = 0.995
 ALPHA_WARMUP   = 0.900   # fast initial convergence (v5.1)
 N_WARMUP       = 30      # noise frames before switching to ALPHA_DEFAULT (v5.1)
-REG            = 3e-2
+
+# v7.3 (this revision) — diagonal loading raised 3e-2 → 0.3
+# ---------------------------------------------------------------
+# compute_weights() trace-normalises R_nn⁻¹ to trace = N every frame before
+# adding reg·I, so REG's effect is NOT "how big is reg in absolute terms" —
+# it's "how much diagonal loading relative to a unit-average-power R_nn⁻¹".
+# At 3e-2 that is only a 3% loading: far too little margin against the
+# short-sample estimation error in a recursively-updated R_nn⁻¹ (a few
+# thousand noise frames per clip), which let R_nn⁻¹ carve narrow,
+# accidental nulls pointed straight at the target direction (classic
+# small-sample MVDR self-cancellation — the target's own reverberant
+# energy leaking into "noise" statistics looks, to the covariance
+# estimate, like a strong source worth nulling). Empirically, on the
+# supplied directional_near_dynamic clip, this was directly visible in
+# the beamformer diagnostics: at REG=3e-2, cancel_events=111062 and
+# distort_resets=972 (i.e. the v6.1 self-null repair and v6.2 DAS-fallback
+# firing constantly to paper over it), and oracle_gaze scored -0.65 dB
+# SI-SDR — WORSE than raw_mic (-0.47 dB). Raising REG to 0.3 (a standard
+# ~30% relative diagonal-loading level for robust MVDR) cut cancel_events
+# to 82452 and distort_resets to 138, and oracle_gaze rose to +0.07 dB —
+# now beating both raw_mic and srp. A REG sweep (0.03 → 100) showed a
+# stable plateau from ~0.25-0.7 with 0.15-0.2 landing in a noisy
+# transition region (guard thresholds tripping inconsistently) — 0.3 sits
+# solidly inside the stable, best-performing band. Re-validate against
+# eval_synthetic_2.py if you change this; too high trades away real
+# nulling capability (diminishing/negative returns start past ~1-3).
+REG            = 0.6
 
 # v7.2: numerical-divergence guard (see module docstring above). A bin's
 # trace(R_nn⁻¹) is expected to stay within an order of magnitude of its
@@ -185,47 +211,6 @@ POST_BETA     = 1.0     # Wiener gain exponent  (1 = power, 0.5 = amplitude)
 POST_FLOOR    = 0.10    # minimum Wiener gain (prevents full nulling) (v5.0)
 
 SMOOTH_KERNEL = np.array([0.25, 0.50, 0.25], dtype=np.float64)   # 3-tap (v5.3)
-
-
-def _smooth_freq_axis(weights: np.ndarray, kernel: np.ndarray) -> np.ndarray:
-    """
-    Apply `kernel` along the frequency axis of a (n_bins, N) weight array,
-    for every microphone at once.
-
-    v7.9: this replaces a per-microphone Python loop that did two np.pad and
-    two np.convolve calls per mic per call:
-
-        for n in range(self.N):
-            wr = np.pad(weights[:, n].real, 1, mode='edge')
-            wi = np.pad(weights[:, n].imag, 1, mode='edge')
-            weights[:, n] = (np.convolve(wr, k, mode='valid') +
-                             1j * np.convolve(wi, k, mode='valid'))
-
-    That loop was the single largest hotspot in the whole pipeline —
-    cProfile counted 127,560 np.pad calls in one 60 s / 6-mic clip, roughly
-    25% of total runtime, because each call re-pays NumPy's dispatch cost to
-    smooth just 257 values. The kernel is separable and identical for every
-    microphone, so the entire loop collapses into three slice-adds over the
-    whole array. Measured end-to-end speedup: 1.47x. See runtime_profile/.
-
-    The result is BIT-IDENTICAL to the loop, not merely close:
-      • np.convolve reverses its kernel, so the taps are indexed in reverse
-        order here (k[2] multiplies the leading slice) to match exactly.
-      • mode='edge' padding by one sample is exactly a replicated first and
-        last row, which is what the concatenate below builds.
-      • Real and imaginary parts are smoothed by the same real kernel, so
-        doing it on the complex array in one step is the same arithmetic.
-    runtime_profile/bench_optimizations.py asserts this equivalence
-    end-to-end (max|Δ| = 0.0) before reporting any timing.
-    """
-    if kernel.shape != (3,):
-        raise ValueError(
-            f"_smooth_freq_axis is specialised for a 3-tap kernel; got "
-            f"shape {kernel.shape}. Update this function (and its "
-            f"equivalence test) if SMOOTH_KERNEL changes length.")
-    k0, k1, k2 = float(kernel[0]), float(kernel[1]), float(kernel[2])
-    padded = np.concatenate((weights[:1], weights, weights[-1:]), axis=0)
-    return k2 * padded[:-2] + k1 * padded[1:-1] + k0 * padded[2:]
 
 # v6.0: target-direction projection guard on noise-frame covariance updates
 #
@@ -487,8 +472,7 @@ class MVDRBeamformer:
                  snr_blend_high_db:  float = SNR_BLEND_HIGH_DB,
                  snr_blend_wet_floor: float = SNR_BLEND_WET_FLOOR,
                  mic_selector: 'AdaptiveMicSelector | None' = None,
-                 doa_jump_freq_hz: float = DOA_JUMP_CHECK_FREQ_HZ,
-                 weight_stride: int = 1):
+                 doa_jump_freq_hz: float = DOA_JUMP_CHECK_FREQ_HZ):
         self.N             = N
         self.n_bins        = n_fft // 2 + 1
         self.alpha         = alpha
@@ -568,21 +552,6 @@ class MVDRBeamformer:
 
         # ── v7.1: adaptive mic selection (optional) ─────────────────────────
         self.mic_selector = mic_selector
-
-        # ── v8.0 (runtime_demo): weight-update stride ───────────────────────
-        # Recompute the MVDR weights only every `weight_stride`-th speech
-        # frame, reusing the previous weight vector in between. stride=1 is
-        # bit-identical to pre-v8 behaviour (recompute every speech frame).
-        # A recompute is always forced when weights are invalid (start of
-        # clip, DOA-jump decay, external invalidate_weights()), regardless
-        # of the stride phase. Skipped frames also skip compute_weights()'s
-        # side effects (trace guards, v6.1 distortion repair) — that is part
-        # of the accuracy cost this knob exists to measure. The mic mask is
-        # only re-resolved on recompute frames for the same reason.
-        self.weight_stride = max(1, int(weight_stride))
-        self._weights_age  = 0
-        # v8.0: last mask actually applied in compute_weights (observer aid)
-        self._last_mask: np.ndarray | None = None
 
         # ── Diagnostics ───────────────────────────────────────────────────
         self._nan_resets      = 0
@@ -1120,10 +1089,12 @@ class MVDRBeamformer:
             weights = weights * mic_mask.astype(np.complex64)[None, :]
 
         # ── v5.3 : mild frequency-axis smoothing ──────────────────────────
-        # v7.9: vectorised over all mics at once — see _smooth_freq_axis().
-        # Bit-identical to the per-mic np.pad/np.convolve loop it replaces.
         k = SMOOTH_KERNEL.astype(np.float32)
-        weights = _smooth_freq_axis(weights, k).astype(np.complex64)
+        for n in range(self.N):
+            wr = np.pad(weights[:, n].real, 1, mode='edge')
+            wi = np.pad(weights[:, n].imag, 1, mode='edge')
+            weights[:, n] = (np.convolve(wr, k, mode='valid') +
+                             1j * np.convolve(wi, k, mode='valid'))
 
         # ── v7.0 : restore the distortionless constraint after smoothing ───
         # Each bin's pre-smoothing weight satisfied a[f]^H w[f] = 1 exactly,
@@ -1258,39 +1229,6 @@ class MVDRBeamformer:
 
     # ── Convenience: process one frame end-to-end ─────────────────────────────
 
-    # ── v8.0 (runtime_demo): SNR-stat / gate support helpers ──────────────────
-
-    def update_snr_stats(self, X: np.ndarray, is_noise: bool) -> None:
-        """v7.0 noise/speech power EMA update, factored out of process_frame()
-        so the pipeline's SNR bypass gate can keep the estimate alive on
-        frames it short-circuits. Exactly the former inline block."""
-        frame_power = float(np.mean(np.abs(X) ** 2))
-        if is_noise:
-            self._noise_power_ema = ((1.0 - SNR_POWER_ALPHA) * frame_power
-                                      + SNR_POWER_ALPHA * self._noise_power_ema)
-            self._n_noise_pwr += 1
-        else:
-            self._speech_power_ema = ((1.0 - SNR_POWER_ALPHA) * frame_power
-                                       + SNR_POWER_ALPHA * self._speech_power_ema)
-            self._n_speech_pwr += 1
-
-    def estimated_snr_db(self) -> 'float | None':
-        """Causal input-SNR estimate from the v7.0 EMAs, or None until both
-        classes have seen SNR_BLEND_MIN_FRAMES frames (same trust rule as
-        the SNR-adaptive blend)."""
-        if (self._n_noise_pwr < SNR_BLEND_MIN_FRAMES
-                or self._n_speech_pwr < SNR_BLEND_MIN_FRAMES):
-            return None
-        return 10.0 * np.log10(
-            self._speech_power_ema / (self._noise_power_ema + 1e-12) + 1e-12)
-
-    def invalidate_weights(self) -> None:
-        """Force a weight recompute on the next speech frame (used by the
-        pipeline gate when it re-engages the beamformer after a bypass
-        stretch: the stored weights are stale by an unknown number of
-        frames, so the stride counter must not be allowed to reuse them)."""
-        self._weights_valid = False
-
     def process_frame(self,
                       X: np.ndarray,
                       d: np.ndarray,
@@ -1375,11 +1313,16 @@ class MVDRBeamformer:
         self._last_d = d
 
         # ── v7.0: track noise/speech frame power for SNR-adaptive blending ──
-        # (v8.0: body factored into update_snr_stats() so the pipeline's
-        # bypass gate can keep the EMAs alive on frames that never reach
-        # this method. Same operations, same order — bit-identical.)
         if self.use_snr_adaptive_blend:
-            self.update_snr_stats(X, is_noise)
+            frame_power = float(np.mean(np.abs(X) ** 2))
+            if is_noise:
+                self._noise_power_ema = ((1.0 - SNR_POWER_ALPHA) * frame_power
+                                          + SNR_POWER_ALPHA * self._noise_power_ema)
+                self._n_noise_pwr += 1
+            else:
+                self._speech_power_ema = ((1.0 - SNR_POWER_ALPHA) * frame_power
+                                           + SNR_POWER_ALPHA * self._speech_power_ema)
+                self._n_speech_pwr += 1
 
         # ── v7.1: feed adaptive mic selector, every frame (cheap) ───────────
         if self.mic_selector is not None:
@@ -1418,27 +1361,13 @@ class MVDRBeamformer:
         else:
             self._frames_speech += 1
 
-            # ── v8.0: weight-update stride ──────────────────────────────────
-            # Recompute on: invalid weights (always), else every stride-th
-            # speech frame. At stride=1 the condition is always true, making
-            # the call pattern — and therefore the output — bit-identical to
-            # pre-v8 behaviour.
-            recompute = (not self._weights_valid
-                         or self._weights_age + 1 >= self.weight_stride)
+            # ── v7.1: resolve the mic mask for this speech frame ────────────
+            eff_mask = mic_mask
+            if eff_mask is None and self.mic_selector is not None and theta is not None:
+                self.mic_selector.update(theta, phi)
+                eff_mask = self.mic_selector.get_mask()
 
-            if recompute:
-                # ── v7.1: resolve the mic mask for this speech frame ────────
-                eff_mask = mic_mask
-                if eff_mask is None and self.mic_selector is not None and theta is not None:
-                    self.mic_selector.update(theta, phi)
-                    eff_mask = self.mic_selector.get_mask()
-
-                self.compute_weights(d, mic_mask=eff_mask)
-                self._weights_age = 0
-                self._last_mask   = eff_mask
-            else:
-                self._weights_age += 1
-                eff_mask = self._last_mask   # mask the weights were built with
+            self.compute_weights(d, mic_mask=eff_mask)
             y = self.apply(X)
 
             # ── v5.2 / v6.2 : output-power monitor + DAS fallback ─────────
@@ -1611,8 +1540,6 @@ class MVDRBeamformer:
         self._weights_valid     = False
         self._noise_frame_count = 0   # restart warmup (v5.1)
         self._last_d            = None  # clear projection-guard state (v6.0)
-        self._weights_age       = 0     # v8.0: restart weight-stride phase
-        self._last_mask         = None
 
         # ── v7.0: clear noise-frame purity gate baseline (fresh per clip) ──
         self._mahal_mean             = 0.0

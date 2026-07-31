@@ -307,21 +307,57 @@ class AdaptiveMicSelector:
 
     def _greedy_select(self, theta: float, phi: float, K: int) -> np.ndarray:
         """
-        Greedy phase-spread maximisation: iteratively add the mic whose
-        cross-frequency phase (relative to the current selection) has the
-        highest std-dev, i.e. the mic that adds the most new spatial
-        information given what's already selected. A small stability bias
-        nudges ties toward mics that were already active.
-        """
-        d_full = compute_steering_vector(self.mic_pos, theta, self.n_fft, phi)
-        phases = np.angle(d_full)   # (N, B)
+        Greedy APERTURE-MINIMISATION: iteratively add the mic that keeps the
+        selected subset's physical footprint as COMPACT as possible, i.e.
+        minimises the resulting max pairwise inter-mic distance. A small
+        stability bias nudges ties toward mics that were already active.
 
+        v1.2 fix — was previously "greedy phase-spread MAXIMISATION"
+        --------------------------------------------------------------
+        The old criterion picked, at each step, whichever mic maximised
+        cross-mic phase std-dev relative to the current selection — i.e. it
+        actively sought out the WIDEST-baseline mics. That is backwards for
+        what K_min/low-K selections are supposed to achieve: per this
+        module's own motivation (see module docstring), a small K is chosen
+        specifically at HIGH input SNR to reduce "distortion sources" —
+        steering-vector/calibration error and spatial aliasing. But spatial
+        aliasing kicks in above c/(2*baseline) (see beamformer_2.py's
+        DOA_JUMP_CHECK_FREQ_HZ / spatial-Nyquist notes), so the WIDEST-
+        baseline mics are exactly the ones MOST exposed to that error — the
+        old criterion was reliably picking the worst possible pair at low K.
+        Concretely, on this array (see generate_synthetic_dataset.MIC_POSITIONS),
+        at K=2 the old code always selected mics [4, 5] — the single widest
+        pair in the whole array (0.150 m baseline, aliasing above ~1.1 kHz)
+        — while the closest pair available is only 0.049 m (aliasing-safe to
+        ~3.5 kHz). This directly explains the "MIC SELECTION EFFECT" table
+        showing micsel reliably hurting SI-SDR (-0.4 to -1.2 dB) across
+        every scenario: it was choosing the array's most aliasing-prone
+        subset precisely when it mattered most.
+
+        Diversity for interferer-nulling is still available where it
+        actually matters: at low estimated SNR, K → K_max (near/at the full
+        array) regardless of this criterion, since there's little room left
+        to choose a strict subset. This criterion therefore mainly changes
+        behaviour in the low-K / high-SNR regime, which is exactly where a
+        compact, alias-safe subset was the intended outcome.
+
+        Uses physical mic positions directly (not the look-direction-
+        dependent steering phase) — a mic pair's aliasing frequency depends
+        on their physical separation, not on which way the array happens to
+        be steered right now, so this is both simpler and more robust than
+        the phase-based version.
+        """
         prev_set = set(self._selected.tolist())
 
         selected: List[int] = []
         remaining = list(range(self.N))
 
-        seed_scores = np.abs(phases).mean(axis=1)
+        # Seed with the most CENTRAL mic (smallest mean distance to every
+        # other mic) — the natural starting point for a compact cluster.
+        mean_dist = np.linalg.norm(
+            self.mic_pos[:, None, :] - self.mic_pos[None, :, :], axis=-1
+        ).mean(axis=1)
+        seed_scores = -mean_dist  # higher = more central = better seed
         for i in remaining:
             if i in prev_set:
                 seed_scores[i] += self.stability_bias
@@ -330,12 +366,15 @@ class AdaptiveMicSelector:
         remaining.remove(seed)
 
         while len(selected) < K and remaining:
-            cur_ph     = phases[selected]
-            best_score = -1.0
+            best_score = -np.inf
             best_cand  = remaining[0]
             for cand in remaining:
-                combined = np.concatenate([cur_ph, phases[[cand]]], axis=0)
-                score    = float(np.std(combined, axis=0).mean())
+                cand_set  = selected + [cand]
+                pos       = self.mic_pos[cand_set]
+                pairwise  = np.linalg.norm(
+                    pos[:, None, :] - pos[None, :, :], axis=-1)
+                max_baseline = float(pairwise.max())
+                score = -max_baseline   # higher = more compact = better
                 if cand in prev_set:
                     score += self.stability_bias
                 if score > best_score:

@@ -107,10 +107,6 @@
         </div>
         <div class="row"><span>microphones</span><select data-side="A" data-k="n_mics">
           <option>6</option><option>5</option><option>4</option><option>3</option><option>2</option></select></div>
-        <div class="row"><span>weight stride</span><select data-side="A" data-k="weight_stride">
-          <option>1</option><option>2</option><option>4</option></select></div>
-        <div class="row"><span>bypass gate</span><select data-side="A" data-k="gate">
-          <option value="false">off</option><option value="true">on</option></select></div>
         <div class="metric">
           <div class="lbl">compute duty (stages 2–3): <b id="dutytxtA">—</b>
                <span title="compute time per second of audio, at 1x playback">ⓘ</span></div>
@@ -158,10 +154,6 @@
         </div>
         <div class="row"><span>microphones</span><select data-side="B" data-k="n_mics">
           <option>6</option><option>5</option><option>4</option><option>3</option><option>2</option></select></div>
-        <div class="row"><span>weight stride</span><select data-side="B" data-k="weight_stride">
-          <option>1</option><option>2</option><option>4</option></select></div>
-        <div class="row"><span>bypass gate</span><select data-side="B" data-k="gate">
-          <option value="false">off</option><option value="true">on</option></select></div>
         <div class="metric">
           <div class="lbl">compute duty (stages 2–3): <b id="dutytxtB">—</b>
                <span title="compute time per second of audio, at 1x playback">ⓘ</span></div>
@@ -227,27 +219,26 @@ const $ = id => document.getElementById(id);
 const N_AZ = 72, FLOOR_DB = -30;
 let state = null, last = null;
 
+// chao-v2: weight_stride/gate knobs removed (pipeline re-aligned to main's
+// algorithm code); "cheap" presets now differ by mic count only.
 const PRESETS = {
   p1: { clip: "babble_taz-007_iaz-025_snr-10_rep00",       // sep 17°, −10 dB
-        A: {steering:"gaze", n_mics:6, weight_stride:1, gate:false},
-        B: {steering:"srp",  n_mics:6, weight_stride:1, gate:false} },
+        A: {steering:"gaze", n_mics:6},
+        B: {steering:"srp",  n_mics:6} },
   p2: { clip: "white_noise_taz-008_iaz+000_snr+10_rep00",  // easy, +10 dB
-        A: {steering:"gaze", n_mics:6, weight_stride:1, gate:false},
-        B: {steering:"gaze", n_mics:3, weight_stride:4, gate:true} },
+        A: {steering:"gaze", n_mics:6},
+        B: {steering:"gaze", n_mics:3} },
   // Same cheap B as ②, but on the small-separation clip: nulling a 17°-away
-  // interferer needs the full aperture — the cheap config lands BELOW raw
-  // mic (measured −0.42 dB vs full's +0.53). This, not the dynamic clip,
-  // is where cheap breaks; on cocktail_dynamic −15 the cheap config
-  // actually WON (+0.76) — see sweep_cache.
+  // interferer needs the full aperture.
   p3: { clip: "babble_taz-007_iaz-025_snr-10_rep00",
-        A: {steering:"gaze", n_mics:6, weight_stride:1, gate:false},
-        B: {steering:"gaze", n_mics:3, weight_stride:4, gate:true} },
+        A: {steering:"gaze", n_mics:6},
+        B: {steering:"gaze", n_mics:3} },
   // ④ you steer — moving target (~27° span), eyes vs your hand on a slider.
   // manual az initialized to the target's STARTING azimuth: you begin on
   // target and fall behind as it moves. manualInit matches taz+007.
   p4: { clip: "directional_mid_dynamic_taz+007_iaz-130_snr+10_rep00",
-        A: {steering:"gaze",   n_mics:6, weight_stride:1, gate:false},
-        B: {steering:"manual", n_mics:6, weight_stride:1, gate:false},
+        A: {steering:"gaze",   n_mics:6},
+        B: {steering:"manual", n_mics:6},
         manualInit: {side: "B", az_deg: 7} },
 };
 
@@ -302,9 +293,7 @@ document.querySelectorAll(".cfg select").forEach(sel => {
     const cfg = {};
     document.querySelectorAll(`.cfg select[data-side="${side}"]`).forEach(s => {
       const k = s.dataset.k;
-      cfg[k] = k === "steering" ? s.value
-             : k === "gate"     ? s.value === "true"
-             : parseInt(s.value, 10);
+      cfg[k] = k === "steering" ? s.value : parseInt(s.value, 10);
     });
     post({action: "config", side, cfg}).then(() => post({action: "play"}));
   };

@@ -42,17 +42,16 @@ SWEEP_SECONDS = 30.0        # per-config audio length (keeps 10 configs < 90 s)
 IDLE_PRE_S    = 4.0
 IDLE_GAP_S    = 2.0
 
-# The representative subset — sampled along the expected Pareto frontier.
+# The representative subset. (chao-v2: the weight_stride/gate runtime
+# knobs were removed with the re-alignment to main's algorithm code, so
+# the sweep now spans steering mode and mic count only.)
 SWEEP_CONFIGS: list[dict] = [
-    {"steering": "gaze", "n_mics": 6, "weight_stride": 1, "gate": False},
-    {"steering": "gaze", "n_mics": 6, "weight_stride": 1, "gate": True},
-    {"steering": "gaze", "n_mics": 6, "weight_stride": 4, "gate": False},
-    {"steering": "gaze", "n_mics": 4, "weight_stride": 1, "gate": False},
-    {"steering": "gaze", "n_mics": 4, "weight_stride": 2, "gate": True},
-    {"steering": "gaze", "n_mics": 3, "weight_stride": 4, "gate": True},
-    {"steering": "gaze", "n_mics": 2, "weight_stride": 4, "gate": True},
-    {"steering": "srp",  "n_mics": 6, "weight_stride": 1, "gate": False},
-    {"steering": "srp",  "n_mics": 3, "weight_stride": 4, "gate": True},
+    {"steering": "gaze", "n_mics": 6},
+    {"steering": "gaze", "n_mics": 4},
+    {"steering": "gaze", "n_mics": 3},
+    {"steering": "gaze", "n_mics": 2},
+    {"steering": "srp",  "n_mics": 6},
+    {"steering": "srp",  "n_mics": 3},
 ]
 
 
