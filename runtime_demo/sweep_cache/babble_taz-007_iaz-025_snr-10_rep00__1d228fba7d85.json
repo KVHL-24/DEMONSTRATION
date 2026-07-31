@@ -1,0 +1,173 @@
+{
+ "type": "sweep_result",
+ "clip": "babble_taz-007_iaz-025_snr-10_rep00",
+ "seconds": 30.0,
+ "raw_si_sdr": -9.91,
+ "baseline_w": 6.31,
+ "power_available": true,
+ "results": [
+  {
+   "cfg": {
+    "steering": "gaze",
+    "n_mics": 6,
+    "weight_stride": 1,
+    "gate": false,
+    "gazestab": false,
+    "micsel": false
+   },
+   "short": "gaze+6mic",
+   "si_sdr": -9.38,
+   "delta_db": 0.53,
+   "wall_s": 2.482,
+   "rtf": 0.0827,
+   "gate_frac": 0.0,
+   "mj_per_s": 161.5,
+   "speedup": 1.0
+  },
+  {
+   "cfg": {
+    "steering": "gaze",
+    "n_mics": 6,
+    "weight_stride": 1,
+    "gate": true,
+    "gazestab": false,
+    "micsel": false
+   },
+   "short": "gaze+6mic+gate",
+   "si_sdr": -9.44,
+   "delta_db": 0.47,
+   "wall_s": 2.478,
+   "rtf": 0.0826,
+   "gate_frac": 0.008,
+   "mj_per_s": 164.5,
+   "speedup": 1.0
+  },
+  {
+   "cfg": {
+    "steering": "gaze",
+    "n_mics": 6,
+    "weight_stride": 4,
+    "gate": false,
+    "gazestab": false,
+    "micsel": false
+   },
+   "short": "gaze+6mic+k4",
+   "si_sdr": -9.38,
+   "delta_db": 0.53,
+   "wall_s": 1.704,
+   "rtf": 0.0568,
+   "gate_frac": 0.0,
+   "mj_per_s": 94.3,
+   "speedup": 1.46
+  },
+  {
+   "cfg": {
+    "steering": "gaze",
+    "n_mics": 4,
+    "weight_stride": 1,
+    "gate": false,
+    "gazestab": false,
+    "micsel": false
+   },
+   "short": "gaze+4mic",
+   "si_sdr": -9.43,
+   "delta_db": 0.48,
+   "wall_s": 1.931,
+   "rtf": 0.0644,
+   "gate_frac": 0.0,
+   "mj_per_s": 119.5,
+   "speedup": 1.28
+  },
+  {
+   "cfg": {
+    "steering": "gaze",
+    "n_mics": 4,
+    "weight_stride": 2,
+    "gate": true,
+    "gazestab": false,
+    "micsel": false
+   },
+   "short": "gaze+4mic+k2+gate",
+   "si_sdr": -9.48,
+   "delta_db": 0.43,
+   "wall_s": 1.558,
+   "rtf": 0.0519,
+   "gate_frac": 0.009,
+   "mj_per_s": 95.0,
+   "speedup": 1.59
+  },
+  {
+   "cfg": {
+    "steering": "gaze",
+    "n_mics": 3,
+    "weight_stride": 4,
+    "gate": true,
+    "gazestab": false,
+    "micsel": false
+   },
+   "short": "gaze+3mic+k4+gate",
+   "si_sdr": -10.33,
+   "delta_db": -0.42,
+   "wall_s": 1.219,
+   "rtf": 0.0406,
+   "gate_frac": 0.009,
+   "mj_per_s": 59.3,
+   "speedup": 2.04
+  },
+  {
+   "cfg": {
+    "steering": "gaze",
+    "n_mics": 2,
+    "weight_stride": 4,
+    "gate": true,
+    "gazestab": false,
+    "micsel": false
+   },
+   "short": "gaze+2mic+k4+gate",
+   "si_sdr": -9.98,
+   "delta_db": -0.07,
+   "wall_s": 1.094,
+   "rtf": 0.0365,
+   "gate_frac": 0.009,
+   "mj_per_s": 53.3,
+   "speedup": 2.27
+  },
+  {
+   "cfg": {
+    "steering": "srp",
+    "n_mics": 6,
+    "weight_stride": 1,
+    "gate": false,
+    "gazestab": false,
+    "micsel": false
+   },
+   "short": "srp+6mic",
+   "si_sdr": -9.56,
+   "delta_db": 0.35,
+   "wall_s": 3.107,
+   "rtf": 0.1036,
+   "gate_frac": 0.0,
+   "mj_per_s": 216.3,
+   "speedup": 0.8
+  },
+  {
+   "cfg": {
+    "steering": "srp",
+    "n_mics": 3,
+    "weight_stride": 4,
+    "gate": true,
+    "gazestab": false,
+    "micsel": false
+   },
+   "short": "srp+3mic+k4+gate",
+   "si_sdr": -10.8,
+   "delta_db": -0.89,
+   "wall_s": 1.331,
+   "rtf": 0.0444,
+   "gate_frac": 0.009,
+   "mj_per_s": 79.5,
+   "speedup": 1.86
+  }
+ ],
+ "cached": false
+}

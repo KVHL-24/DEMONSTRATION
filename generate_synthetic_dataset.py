@@ -1143,6 +1143,13 @@ def main(argv=None):
                    choices=ALL_SCENARIOS, metavar='S')
     p.add_argument('--snrs', nargs='+', type=float,
                    default=[-20, -15, -10, -5, 0, 5, 10, 20], metavar='DB')
+    p.add_argument('--scenario-snrs', nargs='*',
+                   default=['directional_mid=-5,-4,-3,-2,-1,0,1,2,3,4,5'],
+                   metavar='SCENARIO=DB,DB,...',
+                   help='Per-scenario SNR grid override, e.g. '
+                        '"directional_mid=-5,-4,-3,-2,-1,0,1,2,3,4,5". '
+                        'Scenarios not listed use --snrs.  Pass with no '
+                        'value to clear all overrides.')
     p.add_argument('--duration', type=float, default=60.0, metavar='S')
     p.add_argument('--rt60', type=float, default=0.15, metavar='S',
                    help='RT60 (seconds) for the ISM fallback path only.  '
@@ -1159,6 +1166,20 @@ def main(argv=None):
     p.add_argument('--conversation-modes', nargs='+', default=['single'],
                    choices=CONVERSATION_MODES)
     args = p.parse_args(argv)
+
+    # ── Parse per-scenario SNR overrides ──────────────────────────────────
+    scenario_snrs = {}
+    for spec in args.scenario_snrs:
+        try:
+            scen, vals = spec.split('=', 1)
+            if scen not in ALL_SCENARIOS:
+                sys.exit(f"--scenario-snrs: unknown scenario '{scen}'")
+            scenario_snrs[scen] = [float(v) for v in vals.split(',')]
+        except ValueError:
+            sys.exit(f"--scenario-snrs: bad spec '{spec}' "
+                     f"(expected SCENARIO=DB,DB,...)")
+    def snrs_for(scenario):
+        return scenario_snrs.get(scenario, args.snrs)
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1199,18 +1220,21 @@ def main(argv=None):
     if not intfr_list:
         intfr_list = [tgt_utts] * 5
 
-    n_total = (len(args.scenarios) * len(args.snrs)
+    n_total = (sum(len(snrs_for(s)) for s in args.scenarios)
                * args.n_reps * len(args.conversation_modes))
     print(f"\nGenerating {n_total} clips  "
-          f"({len(args.scenarios)} scenarios × {len(args.snrs)} SNRs × "
-          f"{args.n_reps} reps × {len(args.conversation_modes)} modes)\n")
+          f"({len(args.scenarios)} scenarios, per-scenario SNR grids × "
+          f"{args.n_reps} reps × {len(args.conversation_modes)} modes)")
+    for scen, grid in scenario_snrs.items():
+        if scen in args.scenarios:
+            print(f"  SNR override {scen}: {[f'{s:+g}' for s in grid]}")
     print(f"  Interferer min angular separation: {INTERFERER_AZ_MIN_SEP}°")
     print(f"  Simulation mode: {'ATF (anechoic + device acoustics, no tail)' if atfs else 'pyroomacoustics ISM'}\n")
 
     all_meta = []
     for conv_mode in args.conversation_modes:
         for scenario in args.scenarios:
-            for snr in args.snrs:
+            for snr in snrs_for(scenario):
                 for rep in range(args.n_reps):
                     try:
                         m = generate_one(

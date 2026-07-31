@@ -586,7 +586,8 @@ class AriaDenoisingPipeline:
                 obs(k, {'speech': speech, 'gated': False,
                         'theta': theta, 'phi': phi,
                         'd': d, 'w': bf._weights,
-                        'mask': getattr(bf, '_last_mask', None),
+                        'mics': (bf.mic_selector.selected.tolist()
+                                 if bf.mic_selector is not None else None),
                         'weights_valid': bf._weights_valid,
                         't_doa_us': (t1 - t0) * 1e6,
                         't_bf_us': (time.perf_counter() - t2) * 1e6})
@@ -716,7 +717,8 @@ class AriaDenoisingPipeline:
             obs(k_idx, {'speech': speech, 'gated': False,
                         'theta': theta, 'phi': phi,
                         'd': d, 'w': bf._weights,
-                        'mask': getattr(bf, '_last_mask', None),
+                        'mics': (bf.mic_selector.selected.tolist()
+                                 if bf.mic_selector is not None else None),
                         'weights_valid': bf._weights_valid,
                         't_doa_us': (t1 - t0) * 1e6,
                         't_bf_us': (time.perf_counter() - t1) * 1e6})

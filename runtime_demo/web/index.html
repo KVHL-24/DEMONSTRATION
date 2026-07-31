@@ -107,6 +107,9 @@
         </div>
         <div class="row"><span>microphones</span><select data-side="A" data-k="n_mics">
           <option>6</option><option>5</option><option>4</option><option>3</option><option>2</option></select></div>
+        <div class="row"><span>mic selection</span><select data-side="A" data-k="micsel">
+          <option value="false">off</option><option value="true">adaptive</option></select></div>
+        <div class="lbl" id="micactA" style="display:none"></div>
         <div class="metric">
           <div class="lbl">compute duty (stages 2–3): <b id="dutytxtA">—</b>
                <span title="compute time per second of audio, at 1x playback">ⓘ</span></div>
@@ -154,6 +157,9 @@
         </div>
         <div class="row"><span>microphones</span><select data-side="B" data-k="n_mics">
           <option>6</option><option>5</option><option>4</option><option>3</option><option>2</option></select></div>
+        <div class="row"><span>mic selection</span><select data-side="B" data-k="micsel">
+          <option value="false">off</option><option value="true">adaptive</option></select></div>
+        <div class="lbl" id="micactB" style="display:none"></div>
         <div class="metric">
           <div class="lbl">compute duty (stages 2–3): <b id="dutytxtB">—</b>
                <span title="compute time per second of audio, at 1x playback">ⓘ</span></div>
@@ -293,7 +299,9 @@ document.querySelectorAll(".cfg select").forEach(sel => {
     const cfg = {};
     document.querySelectorAll(`.cfg select[data-side="${side}"]`).forEach(s => {
       const k = s.dataset.k;
-      cfg[k] = k === "steering" ? s.value : parseInt(s.value, 10);
+      cfg[k] = k === "steering" ? s.value
+             : k === "micsel"   ? s.value === "true"
+             : parseInt(s.value, 10);
     });
     post({action: "config", side, cfg}).then(() => post({action: "play"}));
   };
@@ -457,6 +465,19 @@ es.onmessage = ev => {
         (d.si_sdr === null ? "" : ` · window ${d.si_sdr.toFixed(1)}`) +
         (d.gate_frac ? ` · gated ${(d.gate_frac * 100).toFixed(0)}%` : "");
       $("gate" + s).classList.toggle("on", d.gated);
+      // adaptive mic selection: which mics are live right now
+      const ma = $("micact" + s);
+      if (d.mics && d.cfg) {
+        const n = d.cfg.n_mics, on = new Set(d.mics);
+        let dots = "";
+        for (let i = 0; i < n; i++)
+          dots += `<span style="color:${on.has(i) ? "var(--target)" : "var(--dim)"}">`
+                + `${on.has(i) ? "●" : "○"}</span><sub style="color:var(--dim)">${i}</sub> `;
+        ma.innerHTML = `active mics: ${dots} — ${d.mics.length}/${n}`;
+        ma.style.display = "block";
+      } else {
+        ma.style.display = "none";
+      }
       // hand-vs-eyes rolling error for manual sides
       if (d.cfg && d.cfg.steering === "manual" && d.theta_deg !== null
           && m.shared.gaze_az_deg !== undefined) {

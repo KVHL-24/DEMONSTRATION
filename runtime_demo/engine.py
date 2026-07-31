@@ -178,6 +178,7 @@ class Side:
             "theta_deg": (None if theta is None
                           else round(float(np.degrees(theta)), 1)),
             "gated": gated,
+            "mics": tap.get("mics"),
             "gate_frac": round(self.gated_frames / max(1, len(self.Y)), 3),
             "duty": round(self.duty(), 4),
             "stage_us": {
