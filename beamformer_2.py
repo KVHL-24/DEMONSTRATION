@@ -161,7 +161,7 @@ N_WARMUP       = 30      # noise frames before switching to ALPHA_DEFAULT (v5.1)
 # solidly inside the stable, best-performing band. Re-validate against
 # eval_synthetic_2.py if you change this; too high trades away real
 # nulling capability (diminishing/negative returns start past ~1-3).
-REG            = 0.6
+REG            = 0.3
 
 # v7.2: numerical-divergence guard (see module docstring above). A bin's
 # trace(R_nn⁻¹) is expected to stay within an order of magnitude of its
